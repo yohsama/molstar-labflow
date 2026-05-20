@@ -28,6 +28,7 @@ import { ZenodoImport } from '../../extensions/zenodo';
 import { PluginSpec } from '../../mol-plugin/spec';
 import { MVSData } from '../../extensions/mvs/mvs-data';
 import * as MVSUtil from '../../extensions/mvs/util';
+import { TransformGizmoBehavior, getTransformObjectManager } from '../../extensions/transform-gizmo';
 
 export const ExtensionMap = {
     // Mol* built-in extensions
@@ -50,9 +51,14 @@ export const ExtensionMap = {
     'ma-quality-assessment': PluginSpec.Behavior(MAQualityAssessment),
     'sb-ncbr-partial-charges': PluginSpec.Behavior(SbNcbrPartialCharges),
     'tunnels': PluginSpec.Behavior(SbNcbrTunnels),
+    'transform-gizmo': PluginSpec.Behavior(TransformGizmoBehavior),
 };
 
 export const PluginExtensions = {
+    transformGizmo: {
+        Behavior: TransformGizmoBehavior,
+        getManager: getTransformObjectManager,
+    },
     wwPDBStructConn: wwPDBStructConnExtensionFunctions,
     mvs: {
         MVSData,
