@@ -4,30 +4,16 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
         <link rel="icon" href="./favicon.ico" type="image/x-icon">
-        <title>Mol* Transform Gizmo Test</title>
+        <title>Mol* Root Transform</title>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             html, body { width: 100%; height: 100%; overflow: hidden; }
             #app { position: absolute; left: 0; top: 0; right: 0; bottom: 0; }
-            #ui {
-                position: absolute; top: 10px; left: 10px; z-index: 100;
-                background: rgba(255,255,255,0.9); padding: 10px; border-radius: 4px;
-                font-family: sans-serif; font-size: 12px;
-            }
-            #ui button { margin: 2px; padding: 4px 8px; }
-            #ui pre { margin-top: 8px; max-width: 300px; white-space: pre-wrap; }
         </style>
         <link rel="stylesheet" type="text/css" href="molstar.css" />
     </head>
     <body>
         <div id="app"></div>
-        <div id="ui">
-            <div><strong>Transform Gizmo Test</strong></div>
-            <button id="btn-add">Add Box</button>
-            <button id="btn-mode">Toggle Mode</button>
-            <button id="btn-reset">Reset Camera</button>
-            <pre id="state"></pre>
-        </div>
         <script type="text/javascript" src="./molstar.js"></script>
         <script type="text/javascript">
             molstar.Viewer.create('app', {
@@ -41,60 +27,8 @@
                 viewer.loadPdb('1tqn');
 
                 plugin.canvas3dInitialized.then(() => {
-                    const mgr = molstar.extensions.transformGizmo.getManager(plugin);
+                    const mgr = molstar.PluginExtensions.transformGizmo.getManager(plugin);
                     window.boxManager = mgr;
-
-                    let box = null;
-                    let mode = 'view';
-                    const stateEl = document.getElementById('state');
-
-                    function updateState() {
-                        if (!box) {
-                            stateEl.textContent = 'No box. Click "Add Box".';
-                            return;
-                        }
-                        const s = box.getState();
-                        stateEl.textContent =
-                            'Mode: ' + mode + '\n' +
-                            'Center: [' + s.center.map(v => v.toFixed(2)).join(', ') + ']\n' +
-                            'Size: [' + s.size.map(v => v.toFixed(2)).join(', ') + ']\n' +
-                            'Rotation: [' + s.rotation.map(v => v.toFixed(3)).join(', ') + ']';
-                    }
-
-                    document.getElementById('btn-add').onclick = () => {
-                        if (!mgr) {
-                            alert('TransformGizmo extension not loaded.');
-                            return;
-                        }
-                        if (!box) {
-                            box = mgr.addBox(
-                                molstar.math.LinearAlgebra.Vec3.create(0, 0, 0),
-                                molstar.math.LinearAlgebra.Vec3.create(20, 20, 20),
-                                molstar.math.LinearAlgebra.Quat.identity()
-                            );
-                            mgr.setActiveObject(box.id);
-                            mgr.setMode('transform');
-                            mode = 'transform';
-                        }
-                        updateState();
-                    };
-
-                    document.getElementById('btn-mode').onclick = () => {
-                        if (!mgr || !box) return;
-                        mode = mode === 'view' ? 'transform' : 'view';
-                        mgr.setMode(mode);
-                        updateState();
-                    };
-
-                    document.getElementById('btn-reset').onclick = () => {
-                        viewer.resetCamera();
-                    };
-
-                    if (mgr) {
-                        mgr.events.preview.subscribe(e => {
-                            if (box && e.objectId === box.id) updateState();
-                        });
-                    }
                 });
 
                 window.addEventListener('unload', () => viewer.dispose());

@@ -126,6 +126,12 @@ export class StructureFocusManager extends StatefulPluginComponent<StructureFocu
 
     }
 
+    refreshCurrent(loci?: StructureElement.Loci) {
+        if (!this.state.current) return;
+        if (loci) this.state.current = { ...this.state.current, loci };
+        this.behaviors.current.next(this.state.current);
+    }
+
     clear() {
         if (this.state.current) {
             this.state.current = undefined;

@@ -99,9 +99,10 @@ export class Canvas3dInteractionHelper {
     private handleDrag() {
         const xyChanged = this.startX !== this.endX || this.startY !== this.endY || (this.input.pointerLock && !this.controls.isMoving);
 
-        if (xyChanged && !this.outsideViewport(this.startX, this.startY, this.ray)) {
-            this.events.drag.next({ current: this.prevLoci, buttons: this.buttons, button: this.button, modifiers: this.modifiers, pageStart: Vec2.create(this.startX, this.startY), pageEnd: Vec2.create(this.endX, this.endY) });
-
+        if (xyChanged) {
+            if (!this.outsideViewport(this.startX, this.startY, this.ray)) {
+                this.events.drag.next({ current: this.prevLoci, buttons: this.buttons, button: this.button, modifiers: this.modifiers, pageStart: Vec2.create(this.startX, this.startY), pageEnd: Vec2.create(this.endX, this.endY) });
+            }
             this.startX = this.endX;
             this.startY = this.endY;
         }

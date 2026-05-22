@@ -27,6 +27,7 @@ import { PluginConfig } from '../mol-plugin/config';
 import { StructureSuperpositionControls } from './structure/superposition';
 import { StructureQuickStylesControls } from './structure/quick-styles';
 import { StructureProceduralAnimationControls } from './structure/procedural-animation';
+import { StructureObjectTransformControls } from './structure/box-transform';
 import { Markdown } from './controls/markdown';
 import { Slider } from './controls/slider';
 import { AnimateStateSnapshotTransition } from '../mol-plugin-state/animation/built-in/state-snapshots';
@@ -335,6 +336,7 @@ export class DefaultStructureTools extends PluginUIComponent {
 
             <StructureSourceControls />
             <StructureMeasurementsControls />
+            <StructureObjectTransformControls />
             <StructureSuperpositionControls />
             <StructureQuickStylesControls />
             <StructureProceduralAnimationControls />

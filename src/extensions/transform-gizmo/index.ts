@@ -13,7 +13,7 @@ import { TransformInteractionHandler } from './interaction';
 export { TransformObjectManager } from './manager';
 export { TransformInteractionHandler } from './interaction';
 export { TransformState, OrientedBoxState } from './math';
-export type { BoxObjectHandle, BoxStyle, TransformObjectEvents } from './manager';
+export type { BoxObjectHandle, BoxStyle, MolecularObjectStateSnapshot, MolecularObjectTarget, PoseObjectSourceKind, PoseObjectStateSnapshot, PoseObjectTarget, RootStructureStateSnapshot, TransformObjectEvents, TransformObjectKind, TransformObjectStateSnapshot } from './manager';
 export type { TransformPickTarget, TransformInteractionState } from './interaction';
 
 export const TransformGizmoParams = {
@@ -49,7 +49,8 @@ export const TransformGizmoBehavior = PluginBehavior.create<TransformGizmoProps>
             }
             this.manager = manager;
             this.manager.enableControls(this.params.enabled);
-            this.manager.setMode(this.params.defaultMode);
+            this.manager.setActiveObject(undefined);
+            this.manager.setMode('view');
 
             this.interaction = new TransformInteractionHandler(ctx, this.manager);
             this.interaction.start();
@@ -59,7 +60,7 @@ export const TransformGizmoBehavior = PluginBehavior.create<TransformGizmoProps>
             const changed = super.update(params);
             if (changed) {
                 this.manager.enableControls(params.enabled);
-                this.manager.setMode(params.defaultMode);
+                if (!params.enabled) this.manager.setMode('view');
             }
             return changed;
         }

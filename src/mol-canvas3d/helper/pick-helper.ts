@@ -152,7 +152,7 @@ export class PickHelper {
     identify(x: number, y: number, camera: Camera | StereoCamera): PickData | undefined {
         this.prepare();
 
-        if (this.dirty) {
+        if (this.dirty || !this.buffers.isReady) {
             if (isTimingMode) this.webgl.timer.mark('PickHelper.identify');
             this.webgl.resources.finalizePrograms(['pick'], true);
             this.render(camera);

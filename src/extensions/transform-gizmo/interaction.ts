@@ -8,9 +8,9 @@
 import { PluginContext } from '../../mol-plugin/context';
 import { Canvas3D } from '../../mol-canvas3d/canvas3d';
 import { Subscription } from 'rxjs';
-import { Vec3, Mat4, Quat } from '../../mol-math/linear-algebra';
+import { Vec2, Vec3, Mat4, Quat } from '../../mol-math/linear-algebra';
 
-import { TransformObjectManager } from './manager';
+import { TransformObjectKind, TransformObjectManager } from './manager';
 import { isTransformGizmoLoci, TransformGizmoLociData } from './representation';
 import { GizmoGroup } from './geometry';
 import {
@@ -28,6 +28,13 @@ export type TransformPickTarget =
     | { kind: 'ring'; objectId: string; axis: 'x' | 'y' | 'z' }
     | { kind: 'face'; objectId: string; face: '+x' | '-x' | '+y' | '-y' | '+z' | '-z' };
 
+type TransformPickSource = 'box-face' | 'box-edge' | 'gizmo';
+
+interface ResolvedTransformPick {
+    target: TransformPickTarget;
+    source: TransformPickSource;
+}
+
 // ---------- Interaction State ----------
 
 export type TransformInteractionState =
@@ -38,7 +45,10 @@ export type TransformInteractionState =
 interface DragSession {
     startX: number;
     startY: number;
-    initialBox: OrientedBoxState;
+    dragStartX: number; // CSS-pixel initial position (from first drag event endX)
+    dragStartY: number;
+    objectKind: TransformObjectKind;
+    initialBox?: OrientedBoxState;
     initialTransform: TransformState;
     savedTrackballProps: { rotateSpeed: number; panSpeed: number; zoomSpeed: number };
 }
@@ -46,17 +56,18 @@ interface DragSession {
 // ---------- Helpers ----------
 
 const tmpVec3 = Vec3.zero();
+const tmpMat4 = Mat4.identity();
 
 function groupIdToPickTarget(objectId: string, groupId: number): TransformPickTarget | undefined {
     switch (groupId) {
         case GizmoGroup.Body: return { kind: 'body', objectId };
         case GizmoGroup.Center: return { kind: 'center', objectId };
-        case GizmoGroup.AxisX: return { kind: 'axis', objectId, axis: 'x' };
-        case GizmoGroup.AxisY: return { kind: 'axis', objectId, axis: 'y' };
-        case GizmoGroup.AxisZ: return { kind: 'axis', objectId, axis: 'z' };
-        case GizmoGroup.RingX: return { kind: 'ring', objectId, axis: 'x' };
-        case GizmoGroup.RingY: return { kind: 'ring', objectId, axis: 'y' };
-        case GizmoGroup.RingZ: return { kind: 'ring', objectId, axis: 'z' };
+        case GizmoGroup.AxisX: case GizmoGroup.AxisArrowX: return { kind: 'axis', objectId, axis: 'x' };
+        case GizmoGroup.AxisY: case GizmoGroup.AxisArrowY: return { kind: 'axis', objectId, axis: 'y' };
+        case GizmoGroup.AxisZ: case GizmoGroup.AxisArrowZ: return { kind: 'axis', objectId, axis: 'z' };
+        case GizmoGroup.RingX: case GizmoGroup.RingArrowX: return { kind: 'ring', objectId, axis: 'x' };
+        case GizmoGroup.RingY: case GizmoGroup.RingArrowY: return { kind: 'ring', objectId, axis: 'y' };
+        case GizmoGroup.RingZ: case GizmoGroup.RingArrowZ: return { kind: 'ring', objectId, axis: 'z' };
         case GizmoGroup.FacePosX: return { kind: 'face', objectId, face: '+x' };
         case GizmoGroup.FaceNegX: return { kind: 'face', objectId, face: '-x' };
         case GizmoGroup.FacePosY: return { kind: 'face', objectId, face: '+y' };
@@ -69,6 +80,13 @@ function groupIdToPickTarget(objectId: string, groupId: number): TransformPickTa
 
 function getLocalAxisWorldDirection(box: OrientedBoxState, axisIndex: number, out: Vec3): Vec3 {
     Mat4.fromQuat(tmpMat4, box.rotation);
+    Vec3.set(out, tmpMat4[axisIndex * 4], tmpMat4[axisIndex * 4 + 1], tmpMat4[axisIndex * 4 + 2]);
+    Vec3.normalize(out, out);
+    return out;
+}
+
+function getLocalAxisWorldDirectionFromRotation(rotation: Quat, axisIndex: number, out: Vec3): Vec3 {
+    Mat4.fromQuat(tmpMat4, rotation);
     Vec3.set(out, tmpMat4[axisIndex * 4], tmpMat4[axisIndex * 4 + 1], tmpMat4[axisIndex * 4 + 2]);
     Vec3.normalize(out, out);
     return out;
@@ -91,6 +109,11 @@ function faceSign(face: TransformPickTarget & { kind: 'face' }): number {
 export class TransformInteractionHandler {
     private state: TransformInteractionState = { mode: 'idle' };
     private subs: Subscription[] = [];
+    private mouseDownListener?: (ev: MouseEvent) => void;
+    private mouseMoveListener?: (ev: MouseEvent) => void;
+    private mouseUpListener?: (ev: MouseEvent) => void;
+    private waitingForCanvas = false;
+    private stopped = false;
 
     constructor(
         private plugin: PluginContext,
@@ -98,8 +121,12 @@ export class TransformInteractionHandler {
     ) {}
 
     start() {
+        this.stopped = false;
         const c3d = this.plugin.canvas3d;
-        if (!c3d) return;
+        if (!c3d) {
+            this.startWhenCanvasReady();
+            return;
+        }
 
         this.subs.push(c3d.interaction.hover.subscribe(e => {
             if (!this.manager.isEnabled) return;
@@ -113,34 +140,188 @@ export class TransformInteractionHandler {
 
         this.subs.push(c3d.interaction.drag.subscribe(e => {
             if (!this.manager.isEnabled) return;
-            this.handleDrag(e.pageStart[0], e.pageStart[1], e.pageEnd[0], e.pageEnd[1]);
+            this.handleDrag(e.pageEnd[0], e.pageEnd[1]);
         }));
 
         this.subs.push(c3d.input.interactionEnd.subscribe(() => {
             if (!this.manager.isEnabled) return;
             this.endDrag();
         }));
+
+        this.installNativeMouseCapture();
     }
 
     stop() {
+        this.stopped = true;
         for (const s of this.subs) s.unsubscribe();
         this.subs = [];
+        this.uninstallNativeMouseCapture();
+        this.removeNativeDragListeners();
     }
 
     private get canvas3d(): Canvas3D | undefined {
         return this.plugin.canvas3d;
     }
 
+    private get canvas(): HTMLCanvasElement | undefined {
+        return this.plugin.canvas3dContext?.canvas;
+    }
+
+    private startWhenCanvasReady() {
+        if (this.waitingForCanvas) return;
+        this.waitingForCanvas = true;
+        this.plugin.canvas3dInitialized.then(() => {
+            this.waitingForCanvas = false;
+            if (!this.stopped) this.start();
+        });
+    }
+
+    private get eventWindow(): Window | undefined {
+        return this.canvas?.ownerDocument?.defaultView ?? (typeof window !== 'undefined' ? window : undefined);
+    }
+
+    private installNativeMouseCapture() {
+        const canvas = this.canvas;
+        if (!canvas || this.mouseDownListener) return;
+        this.mouseDownListener = ev => this.handleNativeMouseDown(ev);
+        canvas.addEventListener('mousedown', this.mouseDownListener, true);
+    }
+
+    private uninstallNativeMouseCapture() {
+        const canvas = this.canvas;
+        if (!canvas || !this.mouseDownListener) return;
+        canvas.removeEventListener('mousedown', this.mouseDownListener, true);
+        this.mouseDownListener = undefined;
+    }
+
+    private addNativeDragListeners() {
+        const win = this.eventWindow;
+        if (!win) return;
+        if (this.mouseMoveListener || this.mouseUpListener) return;
+        this.mouseMoveListener = ev => this.handleNativeMouseMove(ev);
+        this.mouseUpListener = ev => this.handleNativeMouseUp(ev);
+        win.addEventListener('mousemove', this.mouseMoveListener, true);
+        win.addEventListener('mouseup', this.mouseUpListener, true);
+    }
+
+    private removeNativeDragListeners() {
+        const win = this.eventWindow;
+        if (!win) return;
+        if (this.mouseMoveListener) {
+            win.removeEventListener('mousemove', this.mouseMoveListener, true);
+            this.mouseMoveListener = undefined;
+        }
+        if (this.mouseUpListener) {
+            win.removeEventListener('mouseup', this.mouseUpListener, true);
+            this.mouseUpListener = undefined;
+        }
+    }
+
+    private canvasPoint(ev: MouseEvent): Vec2 | undefined {
+        const canvas = this.canvas;
+        if (!canvas) return undefined;
+        const rect = canvas.getBoundingClientRect();
+        return Vec2.create(ev.clientX - rect.left, ev.clientY - rect.top);
+    }
+
+    private stopNativeEvent(ev: MouseEvent) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation?.();
+    }
+
+    private pickHitAt(x: number, y: number): ResolvedTransformPick | undefined {
+        const freshLoci = this.pickLociAt(x, y);
+        return this.resolvePickHit(freshLoci);
+    }
+
+    private pickLociAt(x: number, y: number): import('../../mol-repr/representation').Representation.Loci | undefined {
+        const c3d = this.canvas3d;
+        if (!c3d) return undefined;
+        const pickData = c3d.identify(Vec2.create(x, y));
+        return c3d.getLoci(pickData?.id);
+    }
+
+    private isEditablePick(hit: ResolvedTransformPick): boolean {
+        if (hit.source !== 'gizmo') return false;
+        const canUse = (this.manager as any).canUsePickTarget?.(hit.target);
+        return canUse !== false;
+    }
+
+    private isTransformMode(): boolean {
+        const getMode = (this.manager as any).getMode;
+        return typeof getMode === 'function' && getMode.call(this.manager) === 'transform';
+    }
+
+    private handleNativeMouseDown(ev: MouseEvent) {
+        if (!this.manager.isEnabled || ev.button !== 0) return;
+        const point = this.canvasPoint(ev);
+        if (!point) return;
+
+        const hit = this.pickHitAt(point[0], point[1]);
+        if (hit && this.isEditablePick(hit)) {
+            if (!this.beginDrag(hit.target, point[0], point[1])) return;
+
+            this.stopNativeEvent(ev);
+            this.addNativeDragListeners();
+            return;
+        }
+
+        if (this.isTransformMode()) {
+            if (hit && hit.source !== 'gizmo') {
+                this.manager.setActiveObject(hit.target.objectId);
+                this.stopNativeEvent(ev);
+                return;
+            }
+
+            const loci = this.pickLociAt(point[0], point[1]);
+            const selected = (this.manager as any).selectRootStructureFromLoci?.(loci?.loci);
+            if (selected) {
+                this.stopNativeEvent(ev);
+            } else {
+                this.manager.setActiveObject(undefined);
+            }
+        }
+    }
+
+    private handleNativeMouseMove(ev: MouseEvent) {
+        if (this.state.mode !== 'dragging') return;
+        const point = this.canvasPoint(ev);
+        if (!point) return;
+
+        const { target, session } = this.state;
+        this.applyDrag(target, session, session.dragStartX, session.dragStartY, point[0], point[1]);
+        this.stopNativeEvent(ev);
+    }
+
+    private handleNativeMouseUp(ev: MouseEvent) {
+        if (this.state.mode !== 'dragging') return;
+        this.stopNativeEvent(ev);
+        this.removeNativeDragListeners();
+        this.endDrag();
+    }
+
     private resolvePickTarget(loci: import('../../mol-repr/representation').Representation.Loci): TransformPickTarget | undefined {
+        return this.resolvePickHit(loci)?.target;
+    }
+
+    private resolvePickHit(loci: import('../../mol-repr/representation').Representation.Loci): ResolvedTransformPick | undefined {
         if (!loci || !loci.loci) return undefined;
         const dataLoci = loci.loci as any;
         if (!isTransformGizmoLoci(dataLoci)) return undefined;
         const d = dataLoci.data as TransformGizmoLociData;
         for (const [objId, obj] of this.manager['objects'] as Map<string, any>) {
-            if (obj.faceRenderObject.id === d.objectId ||
-                obj.edgeRenderObject.id === d.objectId ||
-                obj.gizmoRenderObject.id === d.objectId) {
-                return groupIdToPickTarget(objId, d.groupId);
+            const target = groupIdToPickTarget(objId, d.groupId);
+            if (!target) continue;
+
+            if (obj.gizmoRenderObject.id === d.objectId) {
+                return { target, source: 'gizmo' };
+            }
+            if (obj.kind === 'box' && obj.faceRenderObject.id === d.objectId) {
+                return { target, source: 'box-face' };
+            }
+            if (obj.kind === 'box' && obj.edgeRenderObject.id === d.objectId) {
+                return { target, source: 'box-edge' };
             }
         }
         return undefined;
@@ -166,56 +347,66 @@ export class TransformInteractionHandler {
     }
 
     private handleClick(reprLoci: import('../../mol-repr/representation').Representation.Loci) {
-        const target = this.resolvePickTarget(reprLoci);
-        if (target) {
+        const hit = this.resolvePickHit(reprLoci);
+        if (hit && this.isTransformMode()) {
+            const target = hit.target;
             this.manager.setActiveObject(target.objectId);
-        } else {
-            this.manager.setActiveObject(undefined);
+            return;
+        }
+        if (this.isTransformMode()) {
+            const selected = (this.manager as any).selectRootStructureFromLoci?.(reprLoci?.loci);
+            if (!selected) this.manager.setActiveObject(undefined);
         }
     }
 
-    private handleDrag(startX: number, startY: number, endX: number, endY: number) {
-        if (this.state.mode === 'hover') {
-            const target = this.state.target;
-            const obj = this.manager.getObject(target.objectId);
-            if (!obj) return;
+    private beginDrag(target: TransformPickTarget, startX: number, startY: number): boolean {
+        const obj = this.manager.getObject(target.objectId);
+        if (!obj) return false;
+        const canUse = (this.manager as any).canUsePickTarget?.(target);
+        if (canUse === false) return false;
 
-            const c3d = this.canvas3d;
-            const savedProps = c3d ? {
-                rotateSpeed: c3d.props.trackball.rotateSpeed,
-                panSpeed: c3d.props.trackball.panSpeed,
-                zoomSpeed: c3d.props.trackball.zoomSpeed,
-            } : { rotateSpeed: 0, panSpeed: 0, zoomSpeed: 0 };
+        const c3d = this.canvas3d;
+        const savedProps = c3d ? {
+            rotateSpeed: c3d.props.trackball.rotateSpeed,
+            panSpeed: c3d.props.trackball.panSpeed,
+            zoomSpeed: c3d.props.trackball.zoomSpeed,
+        } : { rotateSpeed: 0, panSpeed: 0, zoomSpeed: 0 };
 
-            if (c3d) {
-                c3d.setProps({ trackball: { rotateSpeed: 0, panSpeed: 0, zoomSpeed: 0 } }, true);
+        if (c3d) {
+            c3d.setProps({ trackball: { rotateSpeed: 0, panSpeed: 0, zoomSpeed: 0 } }, true);
+        }
+
+        const objectKind: TransformObjectKind = obj.kind ?? 'box';
+        const initialBox = objectKind === 'box' ? OrientedBoxState.clone(obj.state as OrientedBoxState) : undefined;
+        const initialTransform = initialBox ? OrientedBoxState.toTransform(initialBox) : TransformState.clone(obj.state as TransformState);
+
+        this.state = {
+            mode: 'dragging',
+            target,
+            session: {
+                startX,
+                startY,
+                dragStartX: startX,
+                dragStartY: startY,
+                objectKind,
+                initialBox,
+                initialTransform,
+                savedTrackballProps: savedProps,
             }
+        };
+        return true;
+    }
 
-            const initialBox = OrientedBoxState.clone(obj.state);
-            const initialTransform = OrientedBoxState.toTransform(initialBox);
-
-            this.state = {
-                mode: 'dragging',
-                target,
-                session: {
-                    startX,
-                    startY,
-                    initialBox,
-                    initialTransform,
-                    savedTrackballProps: savedProps,
-                }
-            };
-        }
-
-        if (this.state.mode === 'dragging') {
-            const { target, session } = this.state;
-            this.applyDrag(target, session, session.startX, session.startY, endX, endY);
-        }
+    private handleDrag(endX: number, endY: number) {
+        if (this.state.mode !== 'dragging') return;
+        const { target, session } = this.state;
+        this.applyDrag(target, session, session.dragStartX, session.dragStartY, endX, endY);
     }
 
     endDrag() {
         if (this.state.mode !== 'dragging') return;
         const { target, session } = this.state;
+        this.removeNativeDragListeners();
 
         const c3d = this.canvas3d;
         if (c3d) {
@@ -224,8 +415,10 @@ export class TransformInteractionHandler {
 
         const obj = this.manager.getObject(target.objectId);
         if (obj) {
-            const finalTransform = OrientedBoxState.toTransform(obj.state);
-            this.manager.commitTransform(target.objectId, finalTransform);
+            const finalTransform = obj.kind === 'box'
+                ? OrientedBoxState.toTransform(obj.state as OrientedBoxState)
+                : TransformState.clone(obj.state as TransformState);
+            void this.manager.commitTransform(target.objectId, finalTransform);
         }
 
         this.state = { mode: 'idle' };
@@ -245,30 +438,41 @@ export class TransformInteractionHandler {
         const camera = c3d.camera;
         const vp = camera.viewport;
 
-        const box = OrientedBoxState.clone(session.initialBox);
+        // Convert CSS-pixel coordinates from Canvas3D interaction events
+        // into physical pixels for camera.getRay.
+        const pr = (c3d as any).webgl?.pixelRatio ?? 1;
+        const psx = startX * pr;
+        const psy = startY * pr;
+        const pex = endX * pr;
+        const pey = endY * pr;
+
         const transform = TransformState.clone(session.initialTransform);
+        const box = session.initialBox ? OrientedBoxState.clone(session.initialBox) : undefined;
+        const center = box ? box.center : transform.position;
+        const rotation = box ? box.rotation : transform.rotation;
 
         switch (target.kind) {
             case 'center': {
-                const delta = viewPlaneDragDelta(camera, vp.width, vp.height, box.center, startX, startY, endX, endY);
+                const delta = viewPlaneDragDelta(camera, vp.width, vp.height, center, psx, psy, pex, pey);
                 Vec3.add(transform.position, transform.position, delta);
-                Vec3.add(box.center, box.center, delta);
+                if (box) Vec3.add(box.center, box.center, delta);
                 break;
             }
             case 'axis': {
                 const axisIdx = target.axis === 'x' ? 0 : target.axis === 'y' ? 1 : 2;
-                const axisWorld = getLocalAxisWorldDirection(box, axisIdx, tmpVec3);
-                const delta = axisDragDelta(camera, vp.width, vp.height, box.center, axisWorld, startX, startY, endX, endY);
+                const axisWorld = box ? getLocalAxisWorldDirection(box, axisIdx, tmpVec3) : getLocalAxisWorldDirectionFromRotation(rotation, axisIdx, tmpVec3);
+                const delta = axisDragDelta(camera, vp.width, vp.height, center, axisWorld, psx, psy, pex, pey);
                 const move = Vec3.scale(tmpVec3, axisWorld, delta);
                 Vec3.add(transform.position, transform.position, move);
-                Vec3.add(box.center, box.center, move);
+                if (box) Vec3.add(box.center, box.center, move);
                 break;
             }
             case 'face': {
+                if (!box) return;
                 const axisIdx = faceToAxisIndex(target);
                 const sign = faceSign(target);
                 const axisWorld = getLocalAxisWorldDirection(box, axisIdx, tmpVec3);
-                const delta = axisDragDelta(camera, vp.width, vp.height, box.center, axisWorld, startX, startY, endX, endY);
+                const delta = axisDragDelta(camera, vp.width, vp.height, box.center, axisWorld, psx, psy, pex, pey);
                 const result = stretchBoxFace(box, axisIdx, sign, delta);
                 box.center = result.center;
                 box.size = result.size;
@@ -279,25 +483,29 @@ export class TransformInteractionHandler {
             }
             case 'ring': {
                 const axisIdx = target.axis === 'x' ? 0 : target.axis === 'y' ? 1 : 2;
-                const axisWorld = getLocalAxisWorldDirection(box, axisIdx, tmpVec3);
-                const angleDelta = ringRotationDelta(camera, vp.width, vp.height, box.center, axisWorld, startX, startY, endX, endY);
-                const rotResult = rotateAroundAxis(box.rotation, axisWorld, angleDelta, box.center);
-                box.rotation = rotResult.rotation;
-                OrientedBoxState.recomputeMatrix(box);
-                transform.rotation = Quat.clone(box.rotation);
-                transform.position = Vec3.clone(box.center);
+                const axisWorld = box ? getLocalAxisWorldDirection(box, axisIdx, tmpVec3) : getLocalAxisWorldDirectionFromRotation(rotation, axisIdx, tmpVec3);
+                const angleDelta = ringRotationDelta(camera, vp.width, vp.height, center, axisWorld, psx, psy, pex, pey);
+                const rotResult = rotateAroundAxis(rotation, axisWorld, angleDelta, center);
+                transform.rotation = Quat.clone(rotResult.rotation);
+                transform.position = Vec3.clone(center);
+                if (box) {
+                    box.rotation = rotResult.rotation;
+                    OrientedBoxState.recomputeMatrix(box);
+                    transform.rotation = Quat.clone(box.rotation);
+                    transform.position = Vec3.clone(box.center);
+                }
                 break;
             }
             case 'body': {
-                const delta = viewPlaneDragDelta(camera, vp.width, vp.height, box.center, startX, startY, endX, endY);
+                const delta = viewPlaneDragDelta(camera, vp.width, vp.height, center, psx, psy, pex, pey);
                 Vec3.add(transform.position, transform.position, delta);
-                Vec3.add(box.center, box.center, delta);
+                if (box) Vec3.add(box.center, box.center, delta);
                 break;
             }
         }
 
         TransformState.recomputeMatrix(transform);
-        OrientedBoxState.recomputeMatrix(box);
+        if (box) OrientedBoxState.recomputeMatrix(box);
 
         this.manager.previewTransform(target.objectId, transform);
     }

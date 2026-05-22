@@ -4,9 +4,10 @@
  * Transform gizmo math: state types and drag interaction math.
  */
 
-import { Vec3, Mat4, Quat } from '../../mol-math/linear-algebra';
+import { Vec3, Vec4, Mat4, Quat } from '../../mol-math/linear-algebra';
 import { Camera } from '../../mol-canvas3d/camera';
 import { Ray3D } from '../../mol-math/geometry/primitives/ray3d';
+import { Euler } from '../../mol-math/linear-algebra/3d/euler';
 
 // ---------- TransformState ----------
 
@@ -106,11 +107,35 @@ export namespace OrientedBoxState {
     }
 }
 
+// ---------- Box Rotation UI Helpers ----------
+
+const BoxRotationEulerOrder: Euler.Order = 'XYZ';
+const RadToDeg = 180 / Math.PI;
+const DegToRad = Math.PI / 180;
+
+export function boxEulerDegreesToQuat(eulerDegrees: Vec3): Quat {
+    const euler = Euler.create(
+        eulerDegrees[0] * DegToRad,
+        eulerDegrees[1] * DegToRad,
+        eulerDegrees[2] * DegToRad
+    );
+    const rotation = Quat.fromEuler(Quat.identity(), euler, BoxRotationEulerOrder);
+    Quat.normalize(rotation, rotation);
+    return rotation;
+}
+
+export function boxQuatToEulerDegrees(rotation: Quat): Vec3 {
+    const euler = Euler.fromQuat(Euler.zero(), rotation, BoxRotationEulerOrder);
+    return Vec3.create(euler[0] * RadToDeg, euler[1] * RadToDeg, euler[2] * RadToDeg);
+}
+
 // ---------- Drag Math ----------
 
 const tmpVec3a = Vec3.zero();
 const tmpVec3b = Vec3.zero();
 const tmpVec3c = Vec3.zero();
+const tmpVec4a = Vec4.zero();
+const tmpVec4b = Vec4.zero();
 const tmpQuat = Quat.identity();
 
 /**
@@ -128,25 +153,22 @@ export function axisDragDelta(
     pointerEndX: number,
     pointerEndY: number
 ): number {
-    const rayStart = camera.getRay(Ray3D(), pointerStartX, viewportHeight - pointerStartY);
-    const rayEnd = camera.getRay(Ray3D(), pointerEndX, viewportHeight - pointerEndY);
+    const axis = Vec3.normalize(tmpVec3a, axisWorldDir);
+    const referenceWorldDistance = Math.max(camera.getPixelSize(objectCenter) * 64, 1);
+    const axisPoint = Vec3.scaleAndAdd(tmpVec3b, objectCenter, axis, referenceWorldDistance);
 
-    const denomStart = Vec3.dot(rayStart.direction, axisWorldDir);
-    let hitStart = Vec3.clone(objectCenter);
-    if (Math.abs(denomStart) > 1e-4) {
-        const t = Vec3.dot(Vec3.sub(tmpVec3b, objectCenter, rayStart.origin), axisWorldDir) / denomStart;
-        Vec3.scaleAndAdd(hitStart, rayStart.origin, rayStart.direction, t);
-    }
+    camera.project(tmpVec4a, objectCenter);
+    camera.project(tmpVec4b, axisPoint);
 
-    const denomEnd = Vec3.dot(rayEnd.direction, axisWorldDir);
-    let hitEnd = Vec3.clone(objectCenter);
-    if (Math.abs(denomEnd) > 1e-4) {
-        const t = Vec3.dot(Vec3.sub(tmpVec3b, objectCenter, rayEnd.origin), axisWorldDir) / denomEnd;
-        Vec3.scaleAndAdd(hitEnd, rayEnd.origin, rayEnd.direction, t);
-    }
+    const axisScreenX = tmpVec4b[0] - tmpVec4a[0];
+    const axisScreenY = -(tmpVec4b[1] - tmpVec4a[1]);
+    const axisScreenLength = Math.sqrt(axisScreenX * axisScreenX + axisScreenY * axisScreenY);
+    if (axisScreenLength < 1e-4) return 0;
 
-    const delta = Vec3.sub(tmpVec3c, hitEnd, hitStart);
-    return Vec3.dot(delta, axisWorldDir);
+    const pointerDeltaX = pointerEndX - pointerStartX;
+    const pointerDeltaY = pointerEndY - pointerStartY;
+    const signedScreenDelta = (pointerDeltaX * axisScreenX + pointerDeltaY * axisScreenY) / axisScreenLength;
+    return signedScreenDelta * referenceWorldDistance / axisScreenLength;
 }
 
 /**
@@ -203,7 +225,7 @@ export function stretchBoxFace(
     const size = Vec3.clone(box.size);
 
     const axisLocal = faceAxisIndex === 0 ? Vec3.unitX : faceAxisIndex === 1 ? Vec3.unitY : Vec3.unitZ;
-    const axisWorld = Vec3.transformMat4(tmpVec3a, axisLocal, box.matrix);
+    const axisWorld = Vec3.transformQuat(tmpVec3a, axisLocal, box.rotation);
     Vec3.normalize(axisWorld, axisWorld);
 
     const deltaLocal = deltaWorld * faceSign;

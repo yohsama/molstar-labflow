@@ -466,6 +466,8 @@ export class PickBuffers {
         return this.getId(x, y, this.group);
     }
 
+    get isReady() { return this.ready; }
+
     getPickingId(x: number, y: number): PickingId | undefined {
         const objectId = this.getObjectId(x, y);
         // console.log('objectId', objectId);

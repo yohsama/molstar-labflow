@@ -14,11 +14,12 @@ import { PluginConfig } from '../mol-plugin/config';
 import { ParamDefinition as PD } from '../mol-util/param-definition';
 import { PluginUIComponent } from './base';
 import { Button, ControlGroup, IconButton } from './controls/common';
-import { AspectRatioSvg, AutorenewSvg, BuildOutlinedSvg, CameraOutlinedSvg, CloseSvg, FullscreenSvg, HeadsetVRSvg, LightModeSvg, TuneSvg } from './controls/icons';
+import { AspectRatioSvg, AutorenewSvg, BuildOutlinedSvg, CameraOutlinedSvg, CloseSvg, ContentCutSvg, FullscreenSvg, HeadsetVRSvg, LightModeSvg, PencilRulerSvg, TuneSvg, UnionSvg } from './controls/icons';
 import { ToggleSelectionModeButton } from './structure/selection';
 import { ViewportCanvas } from './viewport/canvas';
 import { DownloadScreenshotControls } from './viewport/screenshot';
 import { SimpleSettingsControl } from './viewport/simple-settings';
+import { getTransformObjectManager } from '../extensions/transform-gizmo';
 
 interface ViewportControlsState {
     isSettingsExpanded: boolean,
@@ -196,6 +197,7 @@ export class ViewportControls extends PluginUIComponent<ViewportControlsProps, V
                 </div>
                 {this.plugin.config.get(PluginConfig.Viewport.ShowSelectionMode) && <div>
                     <div className='msp-semi-transparent-background' />
+                    <ViewportTransformControls />
                     <ToggleSelectionModeButton />
                 </div>}
             </div>
@@ -219,3 +221,60 @@ export const Logo = () =>
     <a className='msp-logo' href='https://molstar.org' target='_blank' />;
 
 export const Viewport = () => <ViewportCanvas logo={Logo} />;
+
+class ViewportTransformControls extends PluginUIComponent {
+    private bindManager() {
+        const manager = getTransformObjectManager(this.plugin);
+        if (!manager) return undefined;
+        manager.syncRootStructures(this.plugin.managers.structure.hierarchy.current.structures);
+        return manager;
+    }
+
+    componentDidMount() {
+        this.subscribe(this.plugin.managers.structure.hierarchy.behaviors.selection, () => {
+            this.bindManager();
+            this.forceUpdate();
+        });
+        this.plugin.canvas3dInitialized.then(() => {
+            this.bindManager();
+            const manager = getTransformObjectManager(this.plugin);
+            if (manager) this.subscribe(manager.events.changed, () => this.forceUpdate());
+            this.forceUpdate();
+        });
+    }
+
+    private toggleTransform = () => {
+        const manager = this.bindManager();
+        if (!manager) return;
+        manager.setMode(manager.getMode() === 'transform' ? 'view' : 'transform');
+        this.forceUpdate();
+    };
+
+    private split = () => {
+        const manager = this.bindManager();
+        if (!manager) return;
+        void manager.splitCurrentSelectionToRootObject().then(() => this.forceUpdate());
+    };
+
+    private merge = () => {
+        const manager = this.bindManager();
+        if (!manager) return;
+        manager.mergeRootStructuresToPoseComplex();
+        this.forceUpdate();
+    };
+
+    private icon(icon: React.FC, onClick: (e: React.MouseEvent<HTMLButtonElement>) => void, title: string, isOn = false, disabled = false) {
+        return <IconButton svg={icon} toggleState={isOn} onClick={onClick} title={title} style={{ background: 'transparent' }} disabled={disabled} />;
+    }
+
+    render() {
+        const manager = getTransformObjectManager(this.plugin);
+        const isTransform = manager?.getMode() === 'transform';
+        const disabled = !manager;
+        return <>
+            {this.icon(ContentCutSvg, this.split, 'Split selected structure into a transformable root object', false, disabled)}
+            {this.icon(UnionSvg, this.merge, 'Merge selected root structures into a pose complex', false, disabled)}
+            {this.icon(PencilRulerSvg, this.toggleTransform, 'Toggle Root Transform Mode', isTransform, disabled)}
+        </>;
+    }
+}
