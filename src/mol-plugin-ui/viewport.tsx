@@ -14,7 +14,7 @@ import { PluginConfig } from '../mol-plugin/config';
 import { ParamDefinition as PD } from '../mol-util/param-definition';
 import { PluginUIComponent } from './base';
 import { Button, ControlGroup, IconButton } from './controls/common';
-import { AspectRatioSvg, AutorenewSvg, BuildOutlinedSvg, CameraOutlinedSvg, CloseSvg, ContentCutSvg, FullscreenSvg, HeadsetVRSvg, LightModeSvg, PencilRulerSvg, TuneSvg, UnionSvg } from './controls/icons';
+import { AspectRatioSvg, AutorenewSvg, BuildOutlinedSvg, CameraOutlinedSvg, CloseSvg, ContentCutSvg, FullscreenSvg, HeadsetVRSvg, LightModeSvg, PencilRulerSvg, TuneSvg } from './controls/icons';
 import { ToggleSelectionModeButton } from './structure/selection';
 import { ViewportCanvas } from './viewport/canvas';
 import { DownloadScreenshotControls } from './viewport/screenshot';
@@ -256,13 +256,6 @@ class ViewportTransformControls extends PluginUIComponent {
         void manager.splitCurrentSelectionToRootObject().then(() => this.forceUpdate());
     };
 
-    private merge = () => {
-        const manager = this.bindManager();
-        if (!manager) return;
-        manager.mergeRootStructuresToPoseComplex();
-        this.forceUpdate();
-    };
-
     private icon(icon: React.FC, onClick: (e: React.MouseEvent<HTMLButtonElement>) => void, title: string, isOn = false, disabled = false) {
         return <IconButton svg={icon} toggleState={isOn} onClick={onClick} title={title} style={{ background: 'transparent' }} disabled={disabled} />;
     }
@@ -274,10 +267,8 @@ class ViewportTransformControls extends PluginUIComponent {
         const selection = this.plugin.managers.structure.hierarchy.selection.structures;
         const splittableRoots = selection.filter((s: any) => manager?.canSplitSourceRef(s.cell?.transform?.ref));
         const canSplit = !disabled && splittableRoots.length > 0;
-        const canMerge = !disabled && selection.length >= 2;
         return <>
             {this.icon(ContentCutSvg, this.split, 'Split selected structure into a transformable root object', false, !canSplit)}
-            {this.icon(UnionSvg, this.merge, 'Merge selected root structures into a pose complex', false, !canMerge)}
             {this.icon(PencilRulerSvg, this.toggleTransform, 'Toggle Root Transform Mode', isTransform, disabled)}
         </>;
     }

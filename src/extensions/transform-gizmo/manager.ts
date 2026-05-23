@@ -122,9 +122,9 @@ export function createTransformObjectEvents(): TransformObjectEvents {
 }
 
 export type TransformObjectMode = 'view' | 'transform';
-export type TransformObjectKind = 'box' | 'pose-object' | 'root-structure' | 'pose-complex';
+export type TransformObjectKind = 'box' | 'pose-object' | 'root-structure';
 export type PoseObjectSourceKind = 'structure' | 'component';
-export type TransformObjectChangeReason = 'add' | 'remove' | 'select' | 'mode' | 'update' | 'preview' | 'commit' | 'sync' | 'split' | 'merge';
+export type TransformObjectChangeReason = 'add' | 'remove' | 'select' | 'mode' | 'update' | 'preview' | 'commit' | 'sync' | 'split';
 
 export interface BoxStateSnapshot {
     readonly id: string;
@@ -178,13 +178,6 @@ export interface RootStructureStateSnapshot {
     readonly isLocked: boolean;
 }
 
-export interface PoseComplexStateSnapshot {
-    readonly id: string;
-    readonly kind: 'pose-complex';
-    readonly label: string;
-    readonly rootIds: readonly string[];
-    readonly sourceRefs: readonly string[];
-}
 
 export interface TransformObjectStateSnapshot {
     readonly id: string;
@@ -260,15 +253,6 @@ interface RootStructureRecord extends BaseObjectRecord {
 type StructureTransformRecord = PoseObjectRecord | RootStructureRecord;
 type ObjectRecord = BoxObjectRecord | StructureTransformRecord;
 
-interface PoseComplexRecord {
-    id: string;
-    kind: 'pose-complex';
-    label: string;
-    rootIds: string[];
-    sourceRefs: string[];
-    matrices: Mat4[];
-}
-
 interface FocusPreviewRecord {
     repr: Representation.Any;
     resetTransform: boolean;
@@ -287,7 +271,6 @@ const MolecularTransformTag = 'labflow-object-transform';
 
 export class TransformObjectManager {
     private objects = new Map<string, ObjectRecord>();
-    private poseComplexes = new Map<string, PoseComplexRecord>();
     private poseObjectIdsBySource = new Map<string, string>();
     private rootObjectIdsBySource = new Map<string, string>();
     private authoredRootObjectIds = new Set<string>();
@@ -517,16 +500,6 @@ export class TransformObjectManager {
         return objects;
     }
 
-    listPoseComplexStates(): PoseComplexStateSnapshot[] {
-        return Array.from(this.poseComplexes.values()).map(complex => ({
-            id: complex.id,
-            kind: complex.kind,
-            label: complex.label,
-            rootIds: Array.from(complex.rootIds),
-            sourceRefs: Array.from(complex.sourceRefs),
-        }));
-    }
-
     /** @deprecated Molecular targets must now be registered explicitly as pose objects. */
     listMolecularObjectStates(): MolecularObjectStateSnapshot[] {
         return this.listPoseObjectStates();
@@ -570,16 +543,6 @@ export class TransformObjectManager {
                     isActive: obj.id === this.activeObjectId,
                 });
             }
-        }
-        for (const complex of this.poseComplexes.values()) {
-            objects.push({
-                id: complex.id,
-                kind: complex.kind,
-                label: complex.label,
-                position: Vec3.zero(),
-                rotation: Quat.identity(),
-                isActive: false,
-            });
         }
         return objects;
     }
@@ -689,53 +652,6 @@ export class TransformObjectManager {
         return undefined;
     }
 
-    mergeRootStructuresToPoseComplex(options?: { label?: string; rootIds?: readonly string[] }): string | undefined {
-        let roots: RootStructureRecord[];
-        if (options?.rootIds) {
-            roots = this.listRootStructureRecords(options.rootIds);
-        } else {
-            const selectedStructures = (this.plugin as any).managers?.structure?.hierarchy?.selection?.structures as ReadonlyArray<StructureRef> | undefined;
-            if (!selectedStructures || selectedStructures.length < 2) {
-                this.plugin.log?.warn?.('Merge needs at least two selected root structures.');
-                return undefined;
-            }
-            const selectedIds = selectedStructures
-                .map(s => this.rootObjectIdsBySource.get(s.cell.transform.ref))
-                .filter((id): id is string => !!id);
-            roots = this.listRootStructureRecords(selectedIds);
-        }
-        if (roots.length < 2) {
-            this.plugin.log?.warn?.('Merge needs at least two root structures.');
-            return undefined;
-        }
-
-        const id = `pose-complex-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const record: PoseComplexRecord = {
-            id,
-            kind: 'pose-complex',
-            label: options?.label ?? `Pose Complex ${this.poseComplexes.size + 1}`,
-            rootIds: roots.map(root => root.id),
-            sourceRefs: roots.map(root => root.sourceRef),
-            matrices: roots.map(root => Mat4.clone(root.committedTransform)),
-        };
-        this.poseComplexes.set(id, record);
-        for (const root of roots) {
-            this.suppressedRootSourceRefs.add(root.sourceRef);
-            this.removeObject(root.id);
-        }
-        this.addMergedRootStructureObject(id, record.label, roots);
-        this.setActiveObject(undefined);
-        this.setMode('view');
-        this.refreshCurrentFocus();
-
-        // Sync with hierarchy after merge to ensure un-merged roots stay visible
-        const hierarchy = (this.plugin as any).managers?.structure?.hierarchy;
-        this.syncRootStructures(hierarchy?.current?.structures ?? []);
-
-        this.emitChanged('merge', id);
-        return id;
-    }
-
     private addAuthoredRootStructureObject(target: {
         sourceRef: string,
         label: string,
@@ -835,38 +751,6 @@ export class TransformObjectManager {
         }
 
         return realized.map(split => `root:${split.ref}`);
-    }
-
-    private addMergedRootStructureObject(id: string, label: string, roots: ReadonlyArray<RootStructureRecord>) {
-        const center = Vec3.zero();
-        const baseCenter = Vec3.zero();
-        for (const root of roots) {
-            Vec3.add(center, center, root.state.position);
-            Vec3.add(baseCenter, baseCenter, root.baseCenter);
-        }
-        Vec3.scale(center, center, 1 / roots.length);
-        Vec3.scale(baseCenter, baseCenter, 1 / roots.length);
-
-        let radius = 1;
-        for (const root of roots) {
-            radius = Math.max(radius, Vec3.distance(center, root.state.position) + root.radius);
-        }
-
-        const syntheticStructure = {
-            label,
-            boundary: { sphere: { center: Vec3.clone(center), radius } },
-        } as Structure;
-
-        this.addAuthoredRootStructureObject({
-            sourceRef: id,
-            label,
-            sourceStructure: syntheticStructure,
-            currentStructure: syntheticStructure,
-            center: Vec3.clone(center),
-            baseCenter: Vec3.clone(baseCenter),
-            radius,
-            representations: [],
-        });
     }
 
     private listRootStructureRecords(rootIds?: readonly string[]): RootStructureRecord[] {

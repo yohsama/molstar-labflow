@@ -7,7 +7,7 @@
 import * as React from 'react';
 import { Quat, Vec3 } from '../../mol-math/linear-algebra';
 import { getTransformObjectManager } from '../../extensions/transform-gizmo';
-import { BoxStateSnapshot, PoseComplexStateSnapshot, RootStructureStateSnapshot, TransformObjectManager } from '../../extensions/transform-gizmo/manager';
+import { BoxStateSnapshot, RootStructureStateSnapshot, TransformObjectManager } from '../../extensions/transform-gizmo/manager';
 import { boxEulerDegreesToQuat, boxQuatToEulerDegrees, MIN_BOX_SIZE, OrientedBoxState } from '../../extensions/transform-gizmo/math';
 import { CollapsableControls, PurePluginUIComponent } from '../base';
 import { Button, ControlRow, IconButton } from '../controls/common';
@@ -276,22 +276,12 @@ class ObjectTransformControls extends PurePluginUIComponent<{}, ObjectTransformC
         </div>;
     }
 
-    private renderPoseComplexEntry(snapshot: PoseComplexStateSnapshot, index: number) {
-        const label = snapshot.label || `Pose Complex ${index + 1}`;
-        return <div key={snapshot.id} style={{ marginBottom: '6px' }}>
-            <ControlRow label={label} control={<span className='msp-25-lower-contrast-text'>
-                {snapshot.rootIds.length} roots
-            </span>} />
-        </div>;
-    }
-
     render() {
         const manager = this.manager;
         const boxes = manager?.listBoxStates() ?? [];
         const roots = manager?.listRootStructureStates() ?? [];
-        const complexes = manager?.listPoseComplexStates() ?? [];
         const disabled = !manager;
-        const objectCount = boxes.length + roots.length + complexes.length;
+        const objectCount = boxes.length + roots.length;
 
         return <>
             <div className='msp-flex-row'>
@@ -313,10 +303,6 @@ class ObjectTransformControls extends PurePluginUIComponent<{}, ObjectTransformC
             {boxes.length > 0 && <div style={{ marginTop: '6px' }}>
                 <ControlRow label='Boxes' control={<span className='msp-25-lower-contrast-text'>{boxes.length}</span>} />
                 {boxes.map((box, index) => this.renderBoxEntry(box, index))}
-            </div>}
-            {complexes.length > 0 && <div style={{ marginTop: '6px' }}>
-                <ControlRow label='Pose Complexes' control={<span className='msp-25-lower-contrast-text'>{complexes.length}</span>} />
-                {complexes.map((complex, index) => this.renderPoseComplexEntry(complex, index))}
             </div>}
         </>;
     }

@@ -409,41 +409,6 @@ describe('TransformObjectManager pose object API', () => {
         expect(manager.activeId).toBeUndefined();
     });
 
-    it('merges root structures into a replacement transform target and removes the source targets', () => {
-        const refreshCurrent = jest.fn();
-        const manager = createManager({
-            canvas3d: { requestDraw: jest.fn(), update: jest.fn(), add: jest.fn(), remove: jest.fn() },
-            managers: { structure: { focus: { refreshCurrent }, hierarchy: { selection: { structures: [createRootStructureRef('root-a'), createRootStructureRef('root-b')] } } } },
-        });
-        manager.syncRootStructures([
-            createRootStructureRef('root-a', 'Protein A'),
-            createRootStructureRef('root-b', 'Ligand B'),
-        ]);
-
-        const id = manager.mergeRootStructuresToPoseComplex({ label: 'Analysis Complex' });
-
-        expect(id).toMatch(/^pose-complex-/);
-        expect(manager.listRootStructureStates().map(r => [r.id, r.label])).toEqual([
-            [`root:${id}`, 'Analysis Complex']
-        ]);
-        expect(manager.getMode()).toBe('view');
-        expect(refreshCurrent).toHaveBeenCalledTimes(1);
-    });
-
-    it('does not merge when fewer than two structures are selected', () => {
-        const manager = createManager({
-            canvas3d: { requestDraw: jest.fn(), update: jest.fn(), add: jest.fn(), remove: jest.fn() },
-            managers: { structure: { focus: { refreshCurrent: jest.fn() }, hierarchy: { selection: { structures: [] } } } },
-        });
-        manager.syncRootStructures([
-            createRootStructureRef('root-a', 'Protein A'),
-        ]);
-
-        const id = manager.mergeRootStructuresToPoseComplex({ label: 'Analysis Complex' });
-
-        expect(id).toBeUndefined();
-    });
-
     it('does not split structures that were produced by a previous split', async () => {
         const root = createRootStructureRef('root-a', 'Assembly 1');
         (root as any).model = { cell: { transform: { ref: 'model-a' } } };
