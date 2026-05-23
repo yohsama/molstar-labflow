@@ -88,9 +88,17 @@ export class StructureHierarchyManager extends PluginComponent {
         if (!parent) return undefined;
 
         const root = this.plugin.state.data.selectQ(q => q.byValue(parent).rootOfType(PluginStateObject.Molecule.Structure))[0];
-        if (!root) return undefined;
+        if (root) {
+            return this.behaviors.selection.value.structures.find(s => s.cell === root);
+        }
 
-        return this.behaviors.selection.value.structures.find(s => s.cell === root);
+        // Fallback for structures directly under Model (e.g., SplitRootStructure)
+        // that have no Structure ancestor — check if parent itself is a Structure.
+        if (PluginStateObject.Molecule.Structure.is(parent.obj)) {
+            return this.behaviors.selection.value.structures.find(s => s.cell === parent);
+        }
+
+        return undefined;
     }
 
     private syncCurrent<T extends StructureHierarchyRef>(all: ReadonlyArray<T>, added: Set<StateTransform.Ref>): T[] {

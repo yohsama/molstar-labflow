@@ -271,9 +271,13 @@ class ViewportTransformControls extends PluginUIComponent {
         const manager = getTransformObjectManager(this.plugin);
         const isTransform = manager?.getMode() === 'transform';
         const disabled = !manager;
+        const selection = this.plugin.managers.structure.hierarchy.selection.structures;
+        const splittableRoots = selection.filter((s: any) => manager?.canSplitSourceRef(s.cell?.transform?.ref));
+        const canSplit = !disabled && splittableRoots.length > 0;
+        const canMerge = !disabled && selection.length >= 2;
         return <>
-            {this.icon(ContentCutSvg, this.split, 'Split selected structure into a transformable root object', false, disabled)}
-            {this.icon(UnionSvg, this.merge, 'Merge selected root structures into a pose complex', false, disabled)}
+            {this.icon(ContentCutSvg, this.split, 'Split selected structure into a transformable root object', false, !canSplit)}
+            {this.icon(UnionSvg, this.merge, 'Merge selected root structures into a pose complex', false, !canMerge)}
             {this.icon(PencilRulerSvg, this.toggleTransform, 'Toggle Root Transform Mode', isTransform, disabled)}
         </>;
     }

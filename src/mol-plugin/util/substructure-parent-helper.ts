@@ -38,9 +38,20 @@ class SubstructureParentHelper {
     /** Returns the root node of given structure if existing, takes decorators into account */
     get(s: Structure, ignoreDecorators = false): StateObjectCell<PluginStateObject.Molecule.Structure> | undefined {
         const r = this.root.get(s);
-        if (!r) return;
-        if (ignoreDecorators) return this.plugin.state.data.cells.get(r.ref);
-        return this.plugin.state.data.cells.get(this.getDecorator(r.ref));
+        if (r) {
+            if (ignoreDecorators) return this.plugin.state.data.cells.get(r.ref);
+            return this.plugin.state.data.cells.get(this.getDecorator(r.ref));
+        }
+        // Fallback: search by equivalent structure. This handles cases where
+        // the structure instance used by a representation/visual differs from
+        // the one registered in the state tree (e.g. SplitRootStructure).
+        for (const [structure, entry] of this.root) {
+            if (Structure.areEquivalent(structure, s)) {
+                if (ignoreDecorators) return this.plugin.state.data.cells.get(entry.ref);
+                return this.plugin.state.data.cells.get(this.getDecorator(entry.ref));
+            }
+        }
+        return;
     }
 
     private addMapping(state: State, ref: string, obj: StateObject) {
@@ -61,6 +72,16 @@ class SubstructureParentHelper {
                 this.root.set(obj.data, { ref: parent.transform.ref, count: 1 });
             }
         }
+
+        // Also register the root structure so that Loci.normalize (which remaps
+        // to root) can still resolve back to this cell. This is needed for
+        // SplitRootStructure where the component structure's root is a transient
+        // base structure not present in the state tree.
+        const root = obj.data.root;
+        if (root !== obj.data && !this.root.has(root)) {
+            this.root.set(root, { ref, count: 1 });
+        }
+
         return true;
     }
 
@@ -70,13 +91,28 @@ class SubstructureParentHelper {
         const s = this.tracked.get(ref)!;
         this.tracked.delete(ref);
 
-        const root = this.root.get(s)!;
-
-        if (root.count > 1) {
-            root.count--;
-        } else {
-            this.root.delete(s);
+        const root = this.root.get(s);
+        if (root) {
+            if (root.count > 1) {
+                root.count--;
+            } else {
+                this.root.delete(s);
+            }
         }
+
+        // Also remove the root-structure mapping if it was registered.
+        const rootStruct = s.root;
+        if (rootStruct !== s) {
+            const rootEntry = this.root.get(rootStruct);
+            if (rootEntry && rootEntry.ref === ref) {
+                if (rootEntry.count > 1) {
+                    rootEntry.count--;
+                } else {
+                    this.root.delete(rootStruct);
+                }
+            }
+        }
+
         return true;
     }
 

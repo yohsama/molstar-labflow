@@ -292,6 +292,7 @@ export class TransformObjectManager {
     private rootObjectIdsBySource = new Map<string, string>();
     private authoredRootObjectIds = new Set<string>();
     private suppressedRootSourceRefs = new Set<string>();
+    private splitProducedSourceRefs = new Set<string>();
     private focusPreviewReprs = new Map<Representation.Any, FocusPreviewRecord>();
     private focusPreviewObjectId: string | undefined;
     private activeObjectId: string | undefined;
@@ -477,6 +478,14 @@ export class TransformObjectManager {
         return this.mode;
     }
 
+    canSplitSourceRef(sourceRef: string): boolean {
+        return !this.suppressedRootSourceRefs.has(sourceRef) && !this.splitProducedSourceRefs.has(sourceRef);
+    }
+
+    listSplittableRootStructureStates(): RootStructureStateSnapshot[] {
+        return this.listRootStructureStates().filter(r => this.canSplitSourceRef(r.sourceRef));
+    }
+
     getActiveBoxState(): ActiveBoxStateSnapshot | undefined {
         if (!this.activeObjectId) return undefined;
         const obj = this.objects.get(this.activeObjectId);
@@ -583,6 +592,22 @@ export class TransformObjectManager {
             if (id) seen.add(id);
         }
 
+        // If no valid structures are seen, check the state tree directly before clearing
+        // to avoid removing objects due to transient empty hierarchy during updates.
+        if (seen.size === 0) {
+            const data = this.plugin.state?.data;
+            for (const obj of Array.from(this.objects.values())) {
+                if (obj.kind !== 'root-structure' || this.authoredRootObjectIds.has(obj.id)) continue;
+                const cell = data?.cells?.get(obj.sourceRef);
+                if (cell && cell.obj && cell.obj !== StateObject.Null) {
+                    // Source ref still exists in state tree; keep the object.
+                    continue;
+                }
+                this.removeObject(obj.id);
+            }
+            return;
+        }
+
         for (const obj of Array.from(this.objects.values())) {
             if (obj.kind === 'root-structure' && !seen.has(obj.id) && !this.authoredRootObjectIds.has(obj.id)) {
                 this.removeObject(obj.id);
@@ -638,26 +663,47 @@ export class TransformObjectManager {
     }
 
     async splitCurrentSelectionToRootObject(): Promise<string[] | undefined> {
-        const roots = (this.plugin as any).managers?.structure?.hierarchy?.current?.structures as ReadonlyArray<StructureRef> | undefined;
+        const hierarchy = (this.plugin as any).managers?.structure?.hierarchy;
+        const roots = hierarchy?.selection?.structures as ReadonlyArray<StructureRef> | undefined;
         if (!roots || roots.length === 0) {
-            this.plugin.log?.warn?.('No root structures are available to split.');
+            this.plugin.log?.warn?.('No root structures are selected to split.');
             return undefined;
         }
 
         const ids: string[] = [];
         for (const root of roots) {
+            const sourceRef = root.cell.transform.ref;
+            if (this.suppressedRootSourceRefs.has(sourceRef)) continue;
+            if (this.splitProducedSourceRefs.has(sourceRef)) continue;
             const splitIds = await this.splitStructureRoot(root);
             ids.push(...splitIds);
         }
 
         this.setActiveObject(undefined);
         this.setMode('view');
-        this.emitChanged('split', ids[0]);
-        return ids.length > 0 ? ids : undefined;
+        if (ids.length > 0) {
+            this.emitChanged('split', ids[0]);
+            return ids;
+        }
+        this.plugin.log?.warn?.('No splittable root structures found in selection.');
+        return undefined;
     }
 
     mergeRootStructuresToPoseComplex(options?: { label?: string; rootIds?: readonly string[] }): string | undefined {
-        const roots = this.listRootStructureRecords(options?.rootIds);
+        let roots: RootStructureRecord[];
+        if (options?.rootIds) {
+            roots = this.listRootStructureRecords(options.rootIds);
+        } else {
+            const selectedStructures = (this.plugin as any).managers?.structure?.hierarchy?.selection?.structures as ReadonlyArray<StructureRef> | undefined;
+            if (!selectedStructures || selectedStructures.length < 2) {
+                this.plugin.log?.warn?.('Merge needs at least two selected root structures.');
+                return undefined;
+            }
+            const selectedIds = selectedStructures
+                .map(s => this.rootObjectIdsBySource.get(s.cell.transform.ref))
+                .filter((id): id is string => !!id);
+            roots = this.listRootStructureRecords(selectedIds);
+        }
         if (roots.length < 2) {
             this.plugin.log?.warn?.('Merge needs at least two root structures.');
             return undefined;
@@ -681,6 +727,11 @@ export class TransformObjectManager {
         this.setActiveObject(undefined);
         this.setMode('view');
         this.refreshCurrentFocus();
+
+        // Sync with hierarchy after merge to ensure un-merged roots stay visible
+        const hierarchy = (this.plugin as any).managers?.structure?.hierarchy;
+        this.syncRootStructures(hierarchy?.current?.structures ?? []);
+
         this.emitChanged('merge', id);
         return id;
     }
@@ -758,10 +809,31 @@ export class TransformObjectManager {
         for (const split of realized) {
             await (this.plugin as any).builders?.structure?.representation?.applyPreset?.(split.ref, 'auto');
         }
+        this.suppressedRootSourceRefs.add(root.cell.transform.ref);
         const rootId = this.rootObjectIdsBySource.get(root.cell.transform.ref);
         if (rootId) this.removeObject(rootId);
+        for (const split of realized) {
+            this.splitProducedSourceRefs.add(split.ref);
+        }
         await (this.plugin as any).managers?.structure?.hierarchy?.remove?.([root], true);
-        this.syncRootStructures((this.plugin as any).managers?.structure?.hierarchy?.current?.structures ?? []);
+
+        // Defer to next tick to ensure the hierarchy has fully synced after
+        // the state-tree mutation, so that split structures are visible in
+        // current.structures and can be added to the selection.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+        const hierarchy = (this.plugin as any).managers?.structure?.hierarchy;
+        this.syncRootStructures(hierarchy?.current?.structures ?? []);
+
+        // Explicitly add split-produced structures to hierarchy selection so that
+        // Mol* selection/focus systems recognize them.
+        const splitRefs = realized
+            .map(split => hierarchy?.current?.structures?.find((s: any) => s.cell.transform.ref === split.ref))
+            .filter(Boolean) as StructureRef[];
+        if (splitRefs.length > 0 && hierarchy?.updateCurrent) {
+            hierarchy.updateCurrent(splitRefs, 'add');
+        }
+
         return realized.map(split => `root:${split.ref}`);
     }
 
