@@ -62,6 +62,14 @@ class CameraTransitionManager {
         this.update();
     }
 
+    stop() {
+        if (!this.inTransition) return;
+        Camera.copySnapshot(this._current, this.camera.state);
+        Camera.copySnapshot(this._source, this.camera.state);
+        Camera.copySnapshot(this._target, this.camera.state);
+        this.inTransition = false;
+    }
+
     private finish(to: Partial<Camera.Snapshot>) {
         Camera.copySnapshot(this.camera.state, to);
         this.inTransition = false;

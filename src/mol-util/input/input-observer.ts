@@ -15,6 +15,7 @@ import { Vec3 } from '../../mol-math/linear-algebra/3d/vec3';
 import { EPSILON } from '../../mol-math/linear-algebra/3d/common';
 import { BitFlags } from '../bit-flags';
 import { noop } from '../index';
+import { eventOffset as getClientEventOffset } from './event-offset';
 
 export function getButtons(event: MouseEvent | Touch) {
     if (typeof event === 'object') {
@@ -278,6 +279,13 @@ type GestureEvent = {
     rotation: number,
 } & MouseEvent
 
+type EventOffsetTransform = {
+    left: number,
+    top: number,
+    scaleX: number,
+    scaleY: number,
+}
+
 interface InputObserver {
     noScroll: boolean
     noContextMenu: boolean
@@ -404,6 +412,7 @@ namespace InputObserver {
         let button = ButtonsType.Flag.None;
         let isInside = false;
         let hasMoved = false;
+        let dragOffsetTransform: EventOffsetTransform | undefined;
 
         let resizeObserver: ResizeObserver | undefined;
         if (typeof window.ResizeObserver !== 'undefined') {
@@ -957,6 +966,7 @@ namespace InputObserver {
         function onPointerDown(ev: PointerEvent) {
             if (!mask(ev.clientX, ev.clientY)) return;
 
+            dragOffsetTransform = createEventOffsetTransform();
             eventOffset(pointerStart, ev);
             Vec2.copy(pointerDown, pointerStart);
 
@@ -977,6 +987,7 @@ namespace InputObserver {
                 click.next({ x, y, pageX, pageY, buttons, button, modifiers: getModifierKeys() });
             }
             hasMoved = false;
+            dragOffsetTransform = void 0;
         }
 
         function onPointerMove(ev: PointerEvent) {
@@ -1017,7 +1028,9 @@ namespace InputObserver {
             }
 
             const [dx, dy] = pointerDelta;
-            drag.next({ x, y, dx, dy, pageX, pageY, buttons, button, modifiers: getModifierKeys(), isStart });
+            // Emit zero delta for the first drag frame to avoid a visible jump
+            // when the first mousemove arrives with a larger accumulated offset.
+            drag.next({ x, y, dx: isStart ? 0 : dx, dy: isStart ? 0 : dy, pageX, pageY, buttons, button, modifiers: getModifierKeys(), isStart });
 
             Vec2.copy(pointerStart, pointerEnd);
             dragging = DraggingState.Moving;
@@ -1094,8 +1107,8 @@ namespace InputObserver {
             if (element instanceof Window || element instanceof Document || element === document.body) {
                 return true;
             } else {
-                const rect = element.getBoundingClientRect();
-                return pos[0] >= 0 && pos[1] >= 0 && pos[0] < rect.width && pos[1] < rect.height;
+                getClientSize(rectSize);
+                return pos[0] >= 0 && pos[1] >= 0 && pos[0] < rectSize[0] && pos[1] < rectSize[1];
             }
         }
 
@@ -1114,11 +1127,35 @@ namespace InputObserver {
                 out[0] = (lockedViewport.x + lockedViewport.width / 2) / pr;
                 out[1] = (height - (lockedViewport.y + lockedViewport.height / 2)) / pr;
             } else {
-                const rect = element.getBoundingClientRect();
-                out[0] = (ev.clientX || 0) - rect.left;
-                out[1] = (ev.clientY || 0) - rect.top;
+                if (dragging !== DraggingState.Stopped && dragOffsetTransform) {
+                    out[0] = (ev.clientX - dragOffsetTransform.left) / dragOffsetTransform.scaleX;
+                    out[1] = (ev.clientY - dragOffsetTransform.top) / dragOffsetTransform.scaleY;
+                } else {
+                    getClientEventOffset(out, ev, element);
+                }
             }
             return out;
+        }
+
+        function createEventOffsetTransform(): EventOffsetTransform | undefined {
+            if (element instanceof Window || element instanceof Document || element === document.body) return void 0;
+
+            const rect = element.getBoundingClientRect();
+            const scaleX = getClientScale(rect.width, element.clientWidth);
+            const scaleY = getClientScale(rect.height, element.clientHeight);
+
+            return {
+                left: rect.left,
+                top: rect.top,
+                scaleX,
+                scaleY,
+            };
+        }
+
+        function getClientScale(rectSize: number, clientSize: number) {
+            if (clientSize <= 0) return 1;
+            const scale = rectSize / clientSize;
+            return scale > 0 ? scale : 1;
         }
 
         function getPagePosition(ev: { pageX: number, pageY: number }) {

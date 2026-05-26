@@ -54,6 +54,19 @@ import { produce } from '../mol-util/produce';
 import { ShaderManager } from './helper/shader-manager';
 import { toFixed } from '../mol-util/number';
 
+function pushCanvasDragDebug(event: string, payload: any) {
+    const g = globalThis as any;
+    if (!g.__labflowDragTraceEnabled) return;
+    const buffer = (g.__labflowDragTrace = g.__labflowDragTrace || []);
+    buffer.push({
+        ts: Date.now(),
+        source: 'canvas3d',
+        event,
+        ...payload,
+    });
+    if (buffer.length > 1200) buffer.splice(0, buffer.length - 1200);
+}
+
 export const CameraFogParams = {
     intensity: PD.Numeric(15, { min: 1, max: 100, step: 1 }),
 };
@@ -749,21 +762,67 @@ namespace Canvas3D {
         }
 
         let animationFrameHandle = 0;
+        let dragDebugTick = 0;
 
         function tick(t: now.Timestamp, options?: { isSynchronous?: boolean, manualDraw?: boolean, updateControls?: boolean, xrFrame?: XRFrame }) {
             if (isContextLost) return;
             if (webgl.xr.session && !options?.xrFrame) return;
 
+            if (isDragging) dragDebugTick += 1;
+            else dragDebugTick = 0;
+
             currentTime = t;
             renderer.setTime((currentTime - startTime) / 1000);
             commit(options?.isSynchronous);
+
+            if (isDragging && dragDebugTick <= 12) {
+                pushCanvasDragDebug('tick-before-controls', {
+                    tick: dragDebugTick,
+                    inTransition: camera.transition.inTransition,
+                    camera: {
+                        position: [camera.position[0], camera.position[1], camera.position[2]],
+                        target: [camera.target[0], camera.target[1], camera.target[2]],
+                        up: [camera.up[0], camera.up[1], camera.up[2]],
+                        radius: camera.state.radius,
+                        mode: camera.state.mode,
+                    }
+                });
+            }
 
             // update the controler before the camera transition
             if (options?.updateControls) {
                 controls.update(currentTime);
             }
 
+            if (isDragging && dragDebugTick <= 12) {
+                pushCanvasDragDebug('tick-after-controls', {
+                    tick: dragDebugTick,
+                    inTransition: camera.transition.inTransition,
+                    camera: {
+                        position: [camera.position[0], camera.position[1], camera.position[2]],
+                        target: [camera.target[0], camera.target[1], camera.target[2]],
+                        up: [camera.up[0], camera.up[1], camera.up[2]],
+                        radius: camera.state.radius,
+                        mode: camera.state.mode,
+                    }
+                });
+            }
+
             camera.transition.tick(currentTime);
+
+            if (isDragging && dragDebugTick <= 12) {
+                pushCanvasDragDebug('tick-after-transition', {
+                    tick: dragDebugTick,
+                    inTransition: camera.transition.inTransition,
+                    camera: {
+                        position: [camera.position[0], camera.position[1], camera.position[2]],
+                        target: [camera.target[0], camera.target[1], camera.target[2]],
+                        up: [camera.up[0], camera.up[1], camera.up[2]],
+                        radius: camera.state.radius,
+                        mode: camera.state.mode,
+                    }
+                });
+            }
             hiZ.tick();
 
             if (options?.manualDraw) {
@@ -1134,8 +1193,36 @@ namespace Canvas3D {
         let isDragging = false;
         let isActivelyInteracting = false;
         const interactionSubs = [
-            input.drag.subscribe(() => {
+            input.drag.subscribe(({ isStart }) => {
                 isDragging = true;
+                if (isStart) {
+                    pushCanvasDragDebug('drag-start-before-cancel', {
+                        inTransition: camera.transition.inTransition,
+                        camera: {
+                            position: [camera.position[0], camera.position[1], camera.position[2]],
+                            target: [camera.target[0], camera.target[1], camera.target[2]],
+                            up: [camera.up[0], camera.up[1], camera.up[2]],
+                            radius: camera.state.radius,
+                            mode: camera.state.mode,
+                        }
+                    });
+                    // User drag must take priority over any in-flight/pending
+                    // camera reset transition to avoid one-frame pose flashes.
+                    camera.transition.stop();
+                    cameraResetRequested = false;
+                    nextCameraResetDuration = void 0;
+                    nextCameraResetSnapshot = void 0;
+                    pushCanvasDragDebug('drag-start-after-cancel', {
+                        inTransition: camera.transition.inTransition,
+                        camera: {
+                            position: [camera.position[0], camera.position[1], camera.position[2]],
+                            target: [camera.target[0], camera.target[1], camera.target[2]],
+                            up: [camera.up[0], camera.up[1], camera.up[2]],
+                            radius: camera.state.radius,
+                            mode: camera.state.mode,
+                        }
+                    });
+                }
             }),
             input.interactionEnd.subscribe(() => {
                 isDragging = false;

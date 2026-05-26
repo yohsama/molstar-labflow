@@ -68,8 +68,8 @@ describe('transform-gizmo geometry', () => {
 
         expect(faceX.center[0] / axisX.max[0]).toBeGreaterThan(0.45);
         expect(faceX.center[0] / axisX.max[0]).toBeLessThan(0.70);
-        expect(faceY.center[1] / axisY.max[1]).toBeGreaterThan(0.45);
-        expect(faceY.center[1] / axisY.max[1]).toBeLessThan(0.70);
+        expect(faceY.center[1] / Math.abs(axisY.min[1])).toBeGreaterThan(0.45);
+        expect(faceY.center[1] / Math.abs(axisY.min[1])).toBeLessThan(0.70);
         expect(faceZ.center[2] / axisZ.max[2]).toBeGreaterThan(0.45);
         expect(faceZ.center[2] / axisZ.max[2]).toBeLessThan(0.70);
     });
@@ -98,7 +98,7 @@ describe('transform-gizmo geometry', () => {
         const ringArrowZ = groupStats(mesh, GizmoGroup.RingArrowZ);
 
         expect(axisArrowX.center[0]).toBeGreaterThan(2.8);
-        expect(axisArrowY.center[1]).toBeGreaterThan(2.8);
+        expect(axisArrowY.center[1]).toBeLessThan(-2.8);
         expect(axisArrowZ.center[2]).toBeGreaterThan(2.8);
 
         expect(ringArrowX.count).toBeGreaterThan(0);

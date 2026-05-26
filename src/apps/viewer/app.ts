@@ -54,9 +54,18 @@ import { ViewerAutoPreset } from './presets';
 import { CameraFocusOptions } from '../../mol-plugin-state/manager/camera';
 import { PluginSpec } from '../../mol-plugin/spec';
 import { NoPrimaryFocusLociBindings } from '../../mol-plugin/behavior/dynamic/camera';
+import { AdaptiveQualityOptions, getAdaptivePixelScale } from './adaptive-quality';
+
+const ADAPTIVE_QUALITY_DRAG_ENGAGE_MS = 150;
 
 export class Viewer {
     private _events = new PluginComponent();
+    private adaptiveQualityOptions: AdaptiveQualityOptions | undefined;
+    private adaptiveQualityInteractionTimer: ReturnType<typeof setTimeout> | undefined;
+    private adaptiveQualityDragEngageTimer: ReturnType<typeof setTimeout> | undefined;
+    private adaptiveQualityFrame: number | undefined;
+    private adaptiveQualityInteracting = false;
+    private adaptiveQualityLastPixelScale: number | undefined;
     public readonly plugin: PluginUIContext;
 
     constructor(plugin: PluginUIContext) {
@@ -96,6 +105,7 @@ export class Viewer {
         const spec: PluginUISpec = {
             canvas3d: {
                 ...defaultSpec.canvas3d,
+                pickPadding: o.pickPadding,
             },
             actions: defaultSpec.actions,
             behaviors: [
@@ -183,7 +193,9 @@ export class Viewer {
                 plugin.canvas3d?.setProps({ renderer: { backgroundColor } });
             }
         }
-        return new Viewer(plugin);
+        const viewer = new Viewer(plugin);
+        viewer.configureAdaptiveQuality(o);
+        return viewer;
     }
 
     /**
@@ -523,6 +535,112 @@ export class Viewer {
         }
     }
 
+    private configureAdaptiveQuality(options: ViewerOptions) {
+        const canvas3d = this.plugin.canvas3d;
+        const canvas3dContext = this.plugin.canvas3dContext;
+        if (!options.adaptiveQuality || !canvas3d || !canvas3dContext) return;
+
+        this.adaptiveQualityOptions = {
+            enabled: true,
+            maxPixelScale: Math.max(options.pixelScale, 0.1),
+            minPixelScale: options.adaptiveQualityMinPixelScale,
+            interactionScaleFactor: options.adaptiveQualityInteractionScaleFactor,
+        };
+
+        const releaseMs = canvas3d.props.userInteractionReleaseMs;
+
+        this.subscribe(canvas3d.input.drag, () => {
+            this.clearAdaptiveQualityInteractionTimer();
+            if (this.adaptiveQualityInteracting || this.adaptiveQualityDragEngageTimer !== undefined) return;
+
+            // Avoid flicker on short fast drags by only lowering resolution
+            // after the interaction has been sustained briefly.
+            this.adaptiveQualityDragEngageTimer = setTimeout(() => {
+                this.adaptiveQualityDragEngageTimer = undefined;
+                if (this.adaptiveQualityInteracting) return;
+                this.adaptiveQualityInteracting = true;
+                this.scheduleAdaptiveQualityUpdate();
+            }, ADAPTIVE_QUALITY_DRAG_ENGAGE_MS);
+        });
+
+        this.subscribe(canvas3d.input.interactionEnd, () => {
+            this.clearAdaptiveQualityDragEngageTimer();
+            this.clearAdaptiveQualityInteractionTimer();
+            if (!this.adaptiveQualityInteracting) return;
+
+            this.adaptiveQualityInteractionTimer = setTimeout(() => {
+                this.adaptiveQualityInteractionTimer = undefined;
+                if (!this.adaptiveQualityInteracting) return;
+                this.adaptiveQualityInteracting = false;
+                this.scheduleAdaptiveQualityUpdate();
+            }, releaseMs);
+        });
+
+        const pulseInteraction = () => {
+            this.clearAdaptiveQualityDragEngageTimer();
+            this.adaptiveQualityInteracting = true;
+            this.scheduleAdaptiveQualityUpdate();
+            this.clearAdaptiveQualityInteractionTimer();
+            this.adaptiveQualityInteractionTimer = setTimeout(() => {
+                this.adaptiveQualityInteractionTimer = undefined;
+                if (!this.adaptiveQualityInteracting) return;
+                this.adaptiveQualityInteracting = false;
+                this.scheduleAdaptiveQualityUpdate();
+            }, releaseMs);
+        };
+
+        // Only pinch triggers the interaction pulse; scroll/wheel is handled by
+        // React Flow for workflow-canvas zoom and must not trigger resolution changes.
+        this.subscribe(canvas3d.input.pinch, pulseInteraction);
+        this.subscribe(canvas3d.input.resize, () => this.scheduleAdaptiveQualityUpdate());
+        this.subscribe(this.plugin.layout.events.updated, () => this.scheduleAdaptiveQualityUpdate());
+
+        this.scheduleAdaptiveQualityUpdate();
+    }
+
+    private clearAdaptiveQualityInteractionTimer() {
+        if (this.adaptiveQualityInteractionTimer !== undefined) {
+            clearTimeout(this.adaptiveQualityInteractionTimer);
+            this.adaptiveQualityInteractionTimer = undefined;
+        }
+    }
+
+    private clearAdaptiveQualityDragEngageTimer() {
+        if (this.adaptiveQualityDragEngageTimer !== undefined) {
+            clearTimeout(this.adaptiveQualityDragEngageTimer);
+            this.adaptiveQualityDragEngageTimer = undefined;
+        }
+    }
+
+    private scheduleAdaptiveQualityUpdate() {
+        if (!this.adaptiveQualityOptions || this.adaptiveQualityFrame !== undefined) return;
+        this.adaptiveQualityFrame = requestAnimationFrame(() => {
+            this.adaptiveQualityFrame = undefined;
+            this.applyAdaptiveQuality();
+        });
+    }
+
+    private applyAdaptiveQuality() {
+        const options = this.adaptiveQualityOptions;
+        const canvas3dContext = this.plugin.canvas3dContext;
+        const canvas = canvas3dContext?.canvas;
+        if (!options || !canvas3dContext || !canvas) return;
+
+        // Use layout client dimensions (clientWidth/clientHeight) instead of
+        // getBoundingClientRect() so that parent CSS transforms (workflow canvas
+        // zoom / pan) do not trigger canvas-buffer or FBO resizes.
+        // Rule: zoom/translate of parent → no buffer change.
+        //       interaction-area resize → full resize with adaptive quality.
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        const nextPixelScale = getAdaptivePixelScale(width, height, options, this.adaptiveQualityInteracting);
+        const previousPixelScale = this.adaptiveQualityLastPixelScale ?? canvas3dContext.props.pixelScale;
+        if (Math.abs(nextPixelScale - previousPixelScale) < 0.01) return;
+
+        this.adaptiveQualityLastPixelScale = nextPixelScale;
+        canvas3dContext.setProps({ pixelScale: nextPixelScale });
+    }
+
     handleResize() {
         this.plugin.layout.events.updated.next(void 0);
     }
@@ -576,6 +694,11 @@ export class Viewer {
     }
 
     dispose() {
+        this.clearAdaptiveQualityInteractionTimer();
+        if (this.adaptiveQualityFrame !== undefined) {
+            cancelAnimationFrame(this.adaptiveQualityFrame);
+            this.adaptiveQualityFrame = undefined;
+        }
         this._events.dispose();
         this.plugin.dispose();
     }

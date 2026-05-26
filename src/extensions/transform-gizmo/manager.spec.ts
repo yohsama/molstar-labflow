@@ -10,6 +10,10 @@ import { StateTransforms } from '../../mol-plugin-state/transforms';
 import { SplitRootStructure } from './split-root-structure';
 
 describe('transform-gizmo manager styling', () => {
+    it('uses a thicker default box edge size for easier border picking', () => {
+        expect(DefaultBoxStyle.edgeSize).toBe(3);
+    });
+
     it('colors box faces by their local axis', () => {
         expect(getBoxFaceGroupColor(DefaultBoxStyle, GizmoGroup.FacePosX)).toBe(ColorNames.red);
         expect(getBoxFaceGroupColor(DefaultBoxStyle, GizmoGroup.FaceNegX)).toBe(ColorNames.red);

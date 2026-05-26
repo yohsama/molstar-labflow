@@ -82,6 +82,72 @@ describe('TransformInteractionHandler', () => {
         }
     });
 
+    it('normalizes native mouse coordinates for transformed canvases', () => {
+        const addedCanvasListeners: { type: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }[] = [];
+        const canvas = {
+            clientWidth: 474,
+            clientHeight: 598,
+            getBoundingClientRect: () => ({ left: 10, top: 20, width: 397.4588, height: 501.4353 }),
+            addEventListener: jest.fn((type, listener, options) => addedCanvasListeners.push({ type, listener, options })),
+            removeEventListener: jest.fn(),
+        };
+
+        const c3d = {
+            interaction: {
+                hover: new Subject<any>(),
+                click: new Subject<any>(),
+                drag: new Subject<any>(),
+            },
+            input: {
+                interactionEnd: new Subject<void>(),
+            },
+            props: {
+                trackball: { rotateSpeed: 5, panSpeed: 1, zoomSpeed: 7 },
+            },
+            setProps: jest.fn(),
+            identify: jest.fn(() => ({ id: { objectId: 101, groupId: GizmoGroup.Center, instanceId: 0 } })),
+            getLoci: jest.fn(() => ({
+                loci: TransformGizmoLoci({ objectId: 101, groupId: GizmoGroup.Center, instanceId: 0 }),
+                repr: undefined,
+            })),
+        };
+
+        const manager = {
+            isEnabled: true,
+            objects: new Map([
+                ['box-1', {
+                    faceRenderObject: { id: 201 },
+                    edgeRenderObject: { id: 202 },
+                    gizmoRenderObject: { id: 101 },
+                    state: OrientedBoxState.create(),
+                }]
+            ]),
+            getObject: jest.fn(() => ({ state: OrientedBoxState.create() })),
+        };
+
+        const handler = new TransformInteractionHandler({
+            canvas3d: c3d,
+            canvas3dContext: { canvas },
+        } as any, manager as any);
+
+        handler.start();
+        const mouseDown = addedCanvasListeners.find(e => e.type === 'mousedown');
+        expect(mouseDown).toBeDefined();
+
+        const event = {
+            button: 0,
+            clientX: 10 + 397.4588 / 2,
+            clientY: 20 + 501.4353 / 2,
+            preventDefault: jest.fn(),
+            stopPropagation: jest.fn(),
+        };
+        (mouseDown!.listener as EventListener)(event as any);
+
+        const point = c3d.identify.mock.calls[0][0];
+        expect(point[0]).toBeCloseTo(474 / 2, 4);
+        expect(point[1]).toBeCloseTo(598 / 2, 4);
+    });
+
     it('starts after the Mol* canvas is initialized', async () => {
         const addedCanvasListeners: { type: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }[] = [];
         let resolveInitialized!: () => void;

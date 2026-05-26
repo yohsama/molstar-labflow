@@ -133,16 +133,16 @@ export function createGizmoMesh(scale: number = 1.0, options?: { includeFaceHand
     const includeFaceHandles = options?.includeFaceHandles ?? true;
     const s = scale;
     const AXIS_LENGTH = 1.55 * s;
-    const AXIS_RADIUS = 0.05 * s;
-    const CONE_RADIUS = 0.12 * s;
+    const AXIS_RADIUS = 0.065 * s;
+    const CONE_RADIUS = 0.15 * s;
     const CONE_LENGTH = 0.22 * s;
     const RING_RADIUS = 1.05 * s;
-    const RING_TUBE = 0.04 * s;
-    const RING_ARROW_RADIUS = 0.12 * s;
+    const RING_TUBE = 0.055 * s;
+    const RING_ARROW_RADIUS = 0.15 * s;
     const RING_ARROW_LENGTH = 0.24 * s;
-    const CENTER_RADIUS = 0.13 * s;
-    const FACE_HANDLE_LENGTH = 0.44 * s;
-    const FACE_HANDLE_THICKNESS = 0.14 * s;
+    const CENTER_RADIUS = 0.17 * s;
+    const FACE_HANDLE_LENGTH = 0.52 * s;
+    const FACE_HANDLE_THICKNESS = 0.18 * s;
     const FACE_HANDLE_OFFSET = AXIS_LENGTH * 0.55;
 
     const state = MeshBuilder.createState(2048, 1024);
@@ -187,10 +187,10 @@ export function createGizmoMesh(scale: number = 1.0, options?: { includeFaceHand
     addCylinder(state, Vec3.origin, Vec3.create(AXIS_LENGTH - CONE_LENGTH, 0, 0), 1, cylinderProps);
     addAxisArrow(GizmoGroup.AxisArrowX, xTip);
 
-    // Axis Y
-    const yTip = Vec3.create(0, AXIS_LENGTH, 0);
+    // Axis Y (green) — reversed direction relative to mol* default
+    const yTip = Vec3.create(0, -AXIS_LENGTH, 0);
     state.currentGroup = GizmoGroup.AxisY;
-    addCylinder(state, Vec3.origin, Vec3.create(0, AXIS_LENGTH - CONE_LENGTH, 0), 1, cylinderProps);
+    addCylinder(state, Vec3.origin, Vec3.create(0, -(AXIS_LENGTH - CONE_LENGTH), 0), 1, cylinderProps);
     addAxisArrow(GizmoGroup.AxisArrowY, yTip);
 
     // Axis Z

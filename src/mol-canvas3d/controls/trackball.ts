@@ -18,6 +18,19 @@ import { absMax, degToRad } from '../../mol-math/misc';
 import { Binding } from '../../mol-util/binding';
 import { Scene } from '../../mol-gl/scene';
 
+function pushTrackballDebug(event: string, payload: any) {
+    const g = globalThis as any;
+    if (!g.__labflowDragTraceEnabled) return;
+    const buffer = (g.__labflowDragTrace = g.__labflowDragTrace || []);
+    buffer.push({
+        ts: Date.now(),
+        source: 'trackball',
+        event,
+        ...payload,
+    });
+    if (buffer.length > 1200) buffer.splice(0, buffer.length - 1200);
+}
+
 const B = ButtonsType;
 const M = ModifiersKeys;
 const Trigger = Binding.Trigger;
@@ -159,6 +172,16 @@ namespace TrackballControls {
         const leaveSub = input.leave.subscribe(onLeave);
 
         let _isInteracting = false;
+        let _debugDragFrame = 0;
+        let _dragPixelRatio = 1;
+        const _dragViewport = Viewport();
+        let _dragInputHeight = 0;
+        let _wasDragRotate = false;
+        let _wasDragPan = false;
+        let _wasDragZoom = false;
+        let _wasDragFocus = false;
+        let _skipNextRotateFrame = false;
+        let _skipNextPanFrame = false;
 
         // For internal use
         const lastPosition = Vec3();
@@ -192,26 +215,40 @@ namespace TrackballControls {
         const up0 = Vec3.clone(camera.up);
 
         const mouseOnScreenVec2 = Vec2();
+        function activeViewport() {
+            return _isInteracting ? _dragViewport : viewport;
+        }
+
+        function activePixelRatio() {
+            return _isInteracting ? _dragPixelRatio : input.pixelRatio;
+        }
+
+        function activeInputHeight() {
+            return _isInteracting ? _dragInputHeight : input.height;
+        }
+
         function getMouseOnScreen(pageX: number, pageY: number) {
+            const vp = activeViewport();
             return Vec2.set(
                 mouseOnScreenVec2,
-                (pageX - viewport.x) / viewport.width,
-                (pageY - viewport.y) / viewport.height
+                (pageX - vp.x) / vp.width,
+                (pageY - vp.y) / vp.height
             );
         }
 
         const mouseOnCircleVec2 = Vec2();
         function getMouseOnCircle(pageX: number, pageY: number) {
+            const vp = activeViewport();
             return Vec2.set(
                 mouseOnCircleVec2,
-                (pageX - viewport.width * 0.5 - viewport.x) / (viewport.width * 0.5),
-                (viewport.height + 2 * (viewport.y - pageY)) / viewport.width // viewport.width intentional
+                (pageX - vp.width * 0.5 - vp.x) / (vp.width * 0.5),
+                (vp.height + 2 * (vp.y - pageY)) / vp.width // vp.width intentional
             );
         }
 
         function getRotateFactor() {
             const aspectRatio = (input.width / input.height) || 1;
-            return p.rotateSpeed * input.pixelRatio * aspectRatio;
+            return p.rotateSpeed * activePixelRatio() * aspectRatio;
         }
 
         const rotAxis = Vec3();
@@ -222,6 +259,12 @@ namespace TrackballControls {
         const rotMoveDir = Vec3();
 
         function rotateCamera() {
+            if (_skipNextRotateFrame) {
+                Vec2.copy(_rotPrev, _rotCurr);
+                _skipNextRotateFrame = false;
+                return;
+            }
+
             const dx = _rotCurr[0] - _rotPrev[0];
             const dy = _rotCurr[1] - _rotPrev[1];
             Vec3.set(rotMoveDir, dx, dy, 0);
@@ -361,12 +404,19 @@ namespace TrackballControls {
         const panOffset = Vec3();
 
         function panCamera() {
+            if (_skipNextPanFrame) {
+                Vec2.copy(_panStart, _panEnd);
+                _skipNextPanFrame = false;
+                return;
+            }
+
             Vec2.sub(panMouseChange, Vec2.copy(panMouseChange, _panEnd), _panStart);
 
             if (Vec2.squaredMagnitude(panMouseChange)) {
-                const factor = input.pixelRatio * p.panSpeed;
-                panMouseChange[0] *= (1 / camera.zoom) * camera.viewport.width * factor;
-                panMouseChange[1] *= (1 / camera.zoom) * camera.viewport.height * factor;
+                const vp = activeViewport();
+                const factor = activePixelRatio() * p.panSpeed;
+                panMouseChange[0] *= (1 / camera.zoom) * vp.width * factor;
+                panMouseChange[1] *= (1 / camera.zoom) * vp.height * factor;
 
                 Vec3.cross(panOffset, Vec3.copy(panOffset, _eye), camera.up);
                 Vec3.setMagnitude(panOffset, panOffset, panMouseChange[0]);
@@ -508,13 +558,16 @@ namespace TrackballControls {
         }
 
         function outsideViewport(x: number, y: number) {
-            x *= input.pixelRatio;
-            y *= input.pixelRatio;
+            const vp = activeViewport();
+            const pr = activePixelRatio();
+            const h = activeInputHeight();
+            x *= pr;
+            y *= pr;
             return (
-                x > viewport.x + viewport.width ||
-                input.height - y > viewport.y + viewport.height ||
-                x < viewport.x ||
-                input.height - y < viewport.y
+                x > vp.x + vp.width ||
+                h - y > vp.y + vp.height ||
+                x < vp.x ||
+                h - y < vp.y
             );
         }
 
@@ -576,6 +629,9 @@ namespace TrackballControls {
             if (isStart && isOutside) return;
             if (!isStart && !_isInteracting) return;
 
+            if (isStart) _debugDragFrame = 0;
+            _debugDragFrame += 1;
+
             _isInteracting = true;
             resetRock(); // start rocking from the center after interactions
 
@@ -586,37 +642,84 @@ namespace TrackballControls {
             const dragFocus = Binding.match(b.dragFocus, buttons, modifiers);
             const dragFocusZoom = Binding.match(b.dragFocusZoom, buttons, modifiers);
 
-            if (useDelta && dragRotate) {
-                Vec2.copy(_rotPrev, getMouseOnCircle(pageX - dx, pageY - dy));
+            if (isStart) {
+                // Freeze pixel-ratio mapping for the whole drag interaction.
+                // Adaptive quality may change input.pixelRatio mid-drag, which
+                // would otherwise remap coordinates and cause a view jump.
+                _dragPixelRatio = input.pixelRatio;
+                _dragInputHeight = input.height;
+                Viewport.copy(_dragViewport, viewport);
+                // Hard-reset residual damping from previous interaction so the
+                // first drag frame does not apply stale rotate/pan/zoom/focus state.
+                _rotLastAngle = 0;
+                _rollLastAngle = 0;
+                _pitchLastAngle = 0;
+                _yawLastAngle = 0;
+                Vec2.copy(_panStart, _panEnd);
+                Vec2.copy(_zoomStart, _zoomEnd);
+                Vec2.copy(_focusStart, _focusEnd);
             }
 
-            getMouseOnCircle(pageX, pageY);
-            getMouseOnScreen(pageX, pageY);
+            // Use normalized local coordinates for transformed hosts (e.g. scaled
+            // React Flow canvases). Raw pageX/pageY can introduce a start-frame
+            // discontinuity because they are in document space.
+            const pr = _dragPixelRatio;
+            const localPageX = x * pr;
+            const localPageY = y * pr;
 
-            const pr = input.pixelRatio;
+            if (_debugDragFrame <= 10 || isStart) {
+                pushTrackballDebug('drag', {
+                    isStart,
+                    frame: _debugDragFrame,
+                    x, y, dx, dy, pageX, pageY,
+                    localPageX, localPageY,
+                    pixelRatio: pr,
+                    inTransition: camera.transition.inTransition,
+                    camera: {
+                        position: [camera.position[0], camera.position[1], camera.position[2]],
+                        target: [camera.target[0], camera.target[1], camera.target[2]],
+                        up: [camera.up[0], camera.up[1], camera.up[2]],
+                        radius: camera.state.radius,
+                        mode: camera.state.mode,
+                    }
+                });
+            }
+
+            if (useDelta && dragRotate) {
+                Vec2.copy(_rotPrev, getMouseOnCircle(localPageX - dx * pr, localPageY - dy * pr));
+            }
+
+            getMouseOnCircle(localPageX, localPageY);
+            getMouseOnScreen(localPageX, localPageY);
+
+            // Re-seed rotate state whenever rotate mode becomes active to avoid
+            // stale _rotPrev values causing a one-frame angle jump.
+            if (dragRotate && (isStart || !_wasDragRotate)) {
+                Vec2.copy(_rotCurr, mouseOnCircleVec2);
+                Vec2.copy(_rotPrev, _rotCurr);
+                _skipNextRotateFrame = true;
+            }
+            if (dragPan && (isStart || !_wasDragPan)) {
+                Vec2.copy(_panStart, mouseOnScreenVec2);
+                Vec2.copy(_panEnd, _panStart);
+                _skipNextPanFrame = true;
+            }
+            if ((dragZoom || dragFocusZoom) && (isStart || !_wasDragZoom)) {
+                Vec2.copy(_zoomStart, mouseOnScreenVec2);
+                Vec2.copy(_zoomEnd, _zoomStart);
+            }
+            if (dragFocus && (isStart || !_wasDragFocus)) {
+                Vec2.copy(_focusStart, mouseOnScreenVec2);
+                Vec2.copy(_focusEnd, _focusStart);
+            }
+
             const vx = (x * pr - viewport.width / 2 - viewport.x) / viewport.width;
             const vy = -(input.height - y * pr - viewport.height / 2 - viewport.y) / viewport.height;
 
             if (isStart) {
-                if (dragRotate) {
-                    Vec2.copy(_rotCurr, mouseOnCircleVec2);
-                    Vec2.copy(_rotPrev, _rotCurr);
-                }
                 if (dragRotateZ) {
                     Vec2.set(_rollCurr, vx, vy);
                     Vec2.copy(_rollPrev, _rollCurr);
-                }
-                if (dragZoom || dragFocusZoom) {
-                    Vec2.copy(_zoomStart, mouseOnScreenVec2);
-                    Vec2.copy(_zoomEnd, _zoomStart);
-                }
-                if (dragFocus) {
-                    Vec2.copy(_focusStart, mouseOnScreenVec2);
-                    Vec2.copy(_focusEnd, _focusStart);
-                }
-                if (dragPan) {
-                    Vec2.copy(_panStart, mouseOnScreenVec2);
-                    Vec2.copy(_panEnd, _panStart);
                 }
             }
 
@@ -629,10 +732,33 @@ namespace TrackballControls {
                 camera.setState({ radius: dist / 5 });
             }
             if (dragPan) Vec2.copy(_panEnd, mouseOnScreenVec2);
+
+            _wasDragRotate = dragRotate;
+            _wasDragPan = dragPan;
+            _wasDragZoom = dragZoom || dragFocusZoom;
+            _wasDragFocus = dragFocus;
         }
 
         function onInteractionEnd() {
+            pushTrackballDebug('interaction-end', {
+                frame: _debugDragFrame,
+                inTransition: camera.transition.inTransition,
+                camera: {
+                    position: [camera.position[0], camera.position[1], camera.position[2]],
+                    target: [camera.target[0], camera.target[1], camera.target[2]],
+                    up: [camera.up[0], camera.up[1], camera.up[2]],
+                    radius: camera.state.radius,
+                    mode: camera.state.mode,
+                }
+            });
             _isInteracting = false;
+            _dragPixelRatio = input.pixelRatio;
+            _wasDragRotate = false;
+            _wasDragPan = false;
+            _wasDragZoom = false;
+            _wasDragFocus = false;
+            _skipNextRotateFrame = false;
+            _skipNextPanFrame = false;
         }
 
         function onWheel({ x, y, spinX, spinY, dz, buttons, modifiers }: WheelInput) {

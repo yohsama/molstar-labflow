@@ -9,6 +9,7 @@ import { PluginContext } from '../../mol-plugin/context';
 import { Canvas3D } from '../../mol-canvas3d/canvas3d';
 import { Subscription } from 'rxjs';
 import { Vec2, Vec3, Mat4, Quat } from '../../mol-math/linear-algebra';
+import { eventOffset as getClientEventOffset } from '../../mol-util/input/event-offset';
 
 import { TransformObjectKind, TransformObjectManager } from './manager';
 import { isTransformGizmoLoci, TransformGizmoLociData } from './representation';
@@ -220,8 +221,7 @@ export class TransformInteractionHandler {
     private canvasPoint(ev: MouseEvent): Vec2 | undefined {
         const canvas = this.canvas;
         if (!canvas) return undefined;
-        const rect = canvas.getBoundingClientRect();
-        return Vec2.create(ev.clientX - rect.left, ev.clientY - rect.top);
+        return getClientEventOffset(Vec2(), ev, canvas);
     }
 
     private stopNativeEvent(ev: MouseEvent) {
@@ -269,8 +269,11 @@ export class TransformInteractionHandler {
 
         if (this.isTransformMode()) {
             if (hit && hit.source !== 'gizmo') {
-                this.manager.setActiveObject(hit.target.objectId);
-                this.stopNativeEvent(ev);
+                // Let the Canvas3D click pipeline activate the object via handleClick(),
+                // which fires on the standard InputObserver → Canvas3D interaction path.
+                // Do NOT stop propagation here: stopNativeEvent would prevent the
+                // InputObserver from seeing this mousedown, so click/drag detection
+                // would be lost and the gizmo would never appear.
                 return;
             }
 
@@ -278,9 +281,11 @@ export class TransformInteractionHandler {
             const selected = (this.manager as any).selectRootStructureFromLoci?.(loci?.loci);
             if (selected) {
                 this.stopNativeEvent(ev);
-            } else {
-                this.manager.setActiveObject(undefined);
             }
+            // Do NOT deselect on mousedown on blank space here — that would
+            // fire before the click/drag distinction is made, closing the
+            // gizmo even when the user starts a camera rotate drag.
+            // Deselection on blank-space CLICK is handled by handleClick().
         }
     }
 

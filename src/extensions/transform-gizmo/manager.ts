@@ -56,7 +56,7 @@ export const DefaultBoxStyle: BoxStyle = {
     faceOpacity: 0.18,
     edgeColor: ColorNames.blue,
     edgeOpacity: 0.8,
-    edgeSize: 2,
+    edgeSize: 3,
     gizmoColorX: ColorNames.red,
     gizmoColorY: ColorNames.green,
     gizmoColorZ: ColorNames.blue,
@@ -297,8 +297,8 @@ export class TransformObjectManager {
 
         const faceMesh = createBoxFaceMesh();
         const edgeLines = createBoxEdgeLines();
-        const minDim = Math.min(boxState.size[0], boxState.size[1], boxState.size[2]);
-        const gizmoScale = Math.max(minDim * 0.25, 2.0);
+        const minDim = Math.min(boxState.size[0], boxState.size[1], boxState.size[2])*1.41;
+        const gizmoScale = Math.max(minDim, 5.0);
         const gizmoMesh = createGizmoMesh(gizmoScale);
 
         const faceShape = Shape.create('box-faces', {}, faceMesh,
@@ -421,6 +421,14 @@ export class TransformObjectManager {
             if (prev) {
                 prev.gizmoVisible = false;
                 this.syncGizmoVisibility(prev);
+                // Restore default edge style on previously active box
+                if (prev.kind === 'box') {
+                    this.applyBoxSelectionStyle(prev, false);
+                }
+                // Clear structure selection highlight
+                if (prev.kind === 'root-structure' || prev.kind === 'pose-object') {
+                    this.clearStructureSelection(prev);
+                }
             }
         }
         this.activeObjectId = id;
@@ -429,6 +437,14 @@ export class TransformObjectManager {
             if (next) {
                 next.gizmoVisible = this.shouldShowGizmo(next);
                 this.syncGizmoVisibility(next);
+                // Apply green selection outline to active box
+                if (next.kind === 'box') {
+                    this.applyBoxSelectionStyle(next, true);
+                }
+                // Add green selection highlight to structure atoms
+                if (next.kind === 'root-structure' || next.kind === 'pose-object') {
+                    this.applyStructureSelection(next);
+                }
             }
         }
         this.events.select.next({ objectId: id });
@@ -1484,6 +1500,39 @@ export class TransformObjectManager {
 
         const cells = data.selectQ(q => q.byRef(ref).subtree().ofType(PluginStateObject.Molecule.Structure.Representation3D));
         return cells.map(cell => cell.obj?.data.repr).filter(Boolean) as Representation.Any[];
+    }
+
+    private applyBoxSelectionStyle(obj: BoxObjectRecord, selected: boolean) {
+        if (!this.canvas3d) return;
+        const vals = (obj.edgeRenderObject as any).values;
+        if (selected) {
+            ValueCell.update(vals.uColor, ColorNames.green);
+            // Temporarily increase edge opacity to make the selection outline pop
+        } else {
+            ValueCell.update(vals.uColor, obj.style.edgeColor);
+        }
+        this.canvas3d.update(obj.edgeRepr, false);
+        this.canvas3d.requestDraw();
+    }
+
+    private applyStructureSelection(obj: StructureTransformRecord) {
+        try {
+            const sel = (this.plugin as any).managers?.interactivity?.lociSelects;
+            if (!sel || typeof sel.select !== 'function') return;
+            if (!obj.currentStructure && !obj.sourceStructure) return;
+            const structure = obj.currentStructure ?? obj.sourceStructure;
+            if (!structure) return;
+            const loci = StructureElement.Loci.all(structure);
+            sel.select({ loci });
+        } catch { /* best-effort */ }
+    }
+
+    private clearStructureSelection(obj: StructureTransformRecord) {
+        try {
+            const sel = (this.plugin as any).managers?.interactivity?.lociSelects;
+            if (!sel || typeof sel.deselectAll !== 'function') return;
+            sel.deselectAll();
+        } catch { /* best-effort */ }
     }
 
     private syncGizmoVisibility(obj: ObjectRecord) {
