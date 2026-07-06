@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file, following t
 Note that since we don't clearly distinguish between a public and private interfaces there will be changes in non-major versions that are potentially breaking. If we make breaking changes to less used interfaces we will highlight it in here.
 
 ## [Unreleased]
+- Add VTK PolyData `.vtp` file format support
+- Bloom on transparent and emissive geometry
+  - Move bloom into the postprocessing/illumination pass (composited inline)
+  - Tighten `isBackground` to handle packed transparent depth precisely
+  - Enable bloom on transparent background
+  - Background-aware blend: screen on transparent background, PMA over on opaque background, additive on geometry
+- Fix size-only representation theme updates in `updateRepresentationsTheme`.
+- Fix ASA coloring for hydrogens
+- Add `histogramPercentile`, `histogramRobustStats`, `downsampleHistogram` to `mol-math/histogram`
+- Direct-volume transfer function improvements
+    - Add data-aware default control points and preset library
+    - Use log-scale on y-axis in control-points UI
+- Add `defaultSnapshotIndex` argument to `MVSLoadOptions` to enable loading a snapshot other than the first one by default
+- Fix `loaders.loadMvs*` options type
+- Read simulation box from gro and lammps files
+
+## [v5.10.0] - 2026-06-14
+- Fix exported image artifacts on transparent background with emissive, bloom, or antialiasing
+- Fix cel-shaded ambient color being stripped to luminance (now uses full RGB, matching the classic lighting path)
 - Fix empty transforms default in `ShapeFromPly`
 - Use morton order for spheres in dot visual with lod-levels
 - Add `Camera.changed` event and rotation/translation setter/getter
@@ -12,9 +31,33 @@ Note that since we don't clearly distinguish between a public and private interf
 - Add mesoscale representation preset
 - Add presets option to `ObjectList` param definition
 - Fix memory leak in `State.dispose()` not invoking transformer `dispose` callbacks for live cells
+- Adds File/Open and drag-and-drop support for Kinemage files in the viewer app
 - Fix bugs in ModelServer surroundingLigands endpoint, resulting in omitWater not honored
 - Fix `Volume` and `Isosurface` getBoundingSphere ignoring instances
+- Fix aromatic ring detection not accounting for hybridization
+- Add axis param to camera spin/rock animation
 - Fix SSAO half/quarter resolution textures for multi-scale
+- Camera improvements
+  - Add the option to approximate "least obstructed direction" when focusing camera, accessibe via `PluginContext.managers.camera.focusLoci` with `optimizeDirection` option
+  - Add `CameraFocusOptions.zoomOut` option that zooms out to to make the entire scene visible before focusing on the target
+  - Add easing support in camera transtion
+- Non-covalent interactions: water bridge support
+- Add OBJ format support
+    - Positions, normals, faces
+    - Groups from usemtl directive
+    - Vertex color extension
+    - Sideload MTL files (diffuse color only)
+- Download Structure From AlphaFoldDB allows IDs with version suffix (version is ignored)
+- Add `loadUrl` method and GET params to Viewer app
+- Add binary PLY format variants support
+- Add `extensions/plugin` with several QoL improvements
+  - Standalone useful loading functions previously avaiable only in the `Viewer` class
+  - Standalong plugin interactivity helper function previously available only via the `Viewer` class
+  - View models (and hooks) for more straightforward usage in React (and in other UI libraries)
+- Add `examples/react` that showcases few ways the Mol* can be used together with React
+- Fix default representation plugin option, which resulted in represenations not being shown automatically when using the default plugin spec
+- Track added custom props in `QueryRuntimeTable` to prevent excess "symbol already added" messages when creating multiple instances of a pluing
+- Handle empty `chem_comp.type`
 
 ## [v5.9.0] - 2026-05-03
 - Fix edge case when `PluginSpec.animations` is empty
